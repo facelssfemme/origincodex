@@ -1,0 +1,141 @@
+@import "tailwindcss";
+
+@layer base {
+  html,
+  body {
+    @apply bg-[#0a0218] text-white antialiased;
+    font-family: "Inter", sans-serif;
+    overflow-x: hidden;
+  }
+}
+
+/* Starfield animation */
+@keyframes twinkle {
+  0%, 100% { opacity: 0.2; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.5); }
+}
+
+@keyframes drift {
+  0% { transform: translateY(0) translateX(0); }
+  100% { transform: translateY(-100vh) translateX(50px); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 20px rgba(107, 33, 168, 0.3), 0 0 40px rgba(107, 33, 168, 0.1); }
+  50% { box-shadow: 0 0 30px rgba(107, 33, 168, 0.6), 0 0 60px rgba(107, 33, 168, 0.3); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+.star {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  background: white;
+  border-radius: 50%;
+  animation: twinkle var(--duration, 3s) ease-in-out infinite;
+  animation-delay: var(--delay, 0s);
+}
+
+.star-bright {
+  width: 3px;
+  height: 3px;
+  background: #d4a853;
+}
+
+/* Reading animation */
+@keyframes read-pulse {
+  0% { opacity: 0.4; transform: scale(0.95); }
+  50% { opacity: 1; transform: scale(1.05); }
+  100% { opacity: 0.4; transform: scale(0.95); }
+}
+
+.reading-animation {
+  animation: read-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes swirl {
+  0% { transform: rotate(0deg) scale(1); opacity: 0.3; }
+  50% { transform: rotate(180deg) scale(1.1); opacity: 0.7; }
+  100% { transform: rotate(360deg) scale(1); opacity: 0.3; }
+}
+
+.swirl-ring {
+  animation: swirl 3s ease-in-out infinite;
+}
+
+/* Cosmic gradient backgrounds */
+.cosmic-gradient {
+  background: linear-gradient(135deg, #0a0218 0%, #1a0533 30%, #2d0a4e 60%, #0a0218 100%);
+}
+
+.cosmic-card {
+  background: linear-gradient(135deg, rgba(26, 5, 51, 0.9) 0%, rgba(45, 10, 78, 0.7) 100%);
+  border: 1px solid rgba(212, 168, 83, 0.15);
+  backdrop-filter: blur(12px);
+}
+
+.glow-button {
+  background: linear-gradient(135deg, #6b21a8 0%, #9333ea 50%, #7c3aed 100%);
+  box-shadow: 0 0 20px rgba(139, 92, 246, 0.3);
+  transition: all 0.3s ease;
+}
+
+.glow-button:hover {
+  box-shadow: 0 0 40px rgba(139, 92, 246, 0.5);
+  transform: translateY(-2px);
+}
+
+.glow-button:active {
+  transform: translateY(0);
+}
+
+.text-gold {
+  color: #d4a853;
+}
+
+.border-gold {
+  border-color: rgba(212, 168, 83, 0.3);
+}
+
+/* Blur reveal overlay */
+.blur-reveal {
+  position: relative;
+}
+
+.blur-reveal::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to bottom, transparent 0%, rgba(10, 2, 24, 0.9) 60%, rgba(10, 2, 24, 1) 100%);
+  pointer-events: none;
+}
+
+/* Smooth step transitions */
+.step-enter {
+  opacity: 0;
+  transform: translateY(20px);
+}
+
+.step-active {
+  opacity: 1;
+  transform: translateY(0);
+  transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(107, 33, 168, 0.3);
+  border-radius: 3px;
+}

@@ -1,6 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState, useCallback, useEffect, useRef } from "react";
-import { scoreQuiz, archetypeStars, type QuizAnswers } from "~/utils/scoring";
+import { scoreQuiz, archetypeStars, type QuizAnswers, type Archetype } from "~/utils/scoring";
+import { createCheckoutSession } from "~/utils/stripe-checkout";
 
 export const Route = createFileRoute("/quiz")({
   component: QuizPage,
@@ -45,6 +46,7 @@ function QuizPage() {
   });
   const [animating, setAnimating] = useState(false);
   const [result, setResult] = useState<ReturnType<typeof scoreQuiz> | null>(null);
+  const [addShadowOrigin, setAddShadowOrigin] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
 
   const transitionTo = useCallback((nextStep: Step) => {
@@ -120,9 +122,37 @@ function QuizPage() {
     }, 2500);
   };
 
-  const handleUnlock = () => {
-    console.log("Unlock reading clicked — placeholder for Stripe Checkout");
-    // navigate({ to: "/checkout" }); // future
+  const handleUnlock = async () => {
+    if (!result) return;
+
+    // Save quiz data to localStorage before redirect
+    const quizData = {
+      name: form.name,
+      archetype: result.primaryArchetype,
+      secondaryArchetype: result.secondaryArchetype,
+      sunSign: result.sunSign,
+      includeShadow: addShadowOrigin,
+      answers: {
+        birthMonth: form.birthMonth,
+        birthDay: form.birthDay,
+        birthYear: form.birthYear,
+        belonging: form.belonging,
+        intensity: form.intensity,
+        nightSky: form.nightSky,
+        dreams: form.dreams,
+        recharge: form.recharge,
+      },
+    };
+    localStorage.setItem("syrena_quiz_data", JSON.stringify(quizData));
+
+    try {
+      const { url } = await createCheckoutSession({ data: { includeShadow: addShadowOrigin } });
+      if (url) {
+        window.location.href = url;
+      }
+    } catch (error) {
+      console.error("Checkout error:", error);
+    }
   };
 
   return (
@@ -425,13 +455,32 @@ function QuizPage() {
                   <span className="text-gray-500 text-xs">✦</span>
                 </div>
               </div>
+
+              {/* Order-bump checkbox */}
+              <label className="flex items-start gap-3 mt-6 p-4 rounded-2xl bg-white/[0.03] border border-white/[0.06] cursor-pointer hover:bg-violet-600/10 hover:border-violet-500/30 transition-all text-left group">
+                <input
+                  type="checkbox"
+                  checked={addShadowOrigin}
+                  onChange={(e) => setAddShadowOrigin(e.target.checked)}
+                  className="mt-0.5 w-5 h-5 rounded-md border-2 border-gray-500/40 bg-transparent appearance-none checked:bg-violet-600 checked:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/50 transition-all flex-shrink-0 relative
+                    checked:after:content-['✓'] checked:after:text-white checked:after:text-xs checked:after:font-bold checked:after:absolute checked:after:inset-0 checked:after:flex checked:after:items-center checked:after:justify-center"
+                />
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-sm text-white/70 group-hover:text-white/90 transition-colors">
+                    ✨ Unlock your <span className="text-gold">Shadow Origin</span> — the part of your energy you're hiding from — for <span className="text-white font-medium">$12</span> more
+                  </span>
+                  <span className="text-xs text-gray-500/50">
+                    Reveal the hidden archetype your soul carries in shadow
+                  </span>
+                </div>
+              </label>
             </div>
 
             <button
               onClick={handleUnlock}
               className="glow-button px-10 py-4 rounded-2xl text-white font-medium text-lg tracking-wide transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] cursor-pointer w-full max-w-xs"
             >
-              Unlock Your Full Reading — $19
+              Unlock Your Full Reading — ${addShadowOrigin ? "31" : "19"}
             </button>
 
             <button

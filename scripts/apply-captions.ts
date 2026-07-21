@@ -191,7 +191,7 @@ async function applyCaptions(
     },
     body: JSON.stringify({
       video_url: videoUrl,
-      style: "hormozi", // Alex Hormozi caption style
+      style: "clean", // Format Finder "Clean" style (Hormozi-style captions)
       captions: {
         font: "bold",
         body_color: "#FFFFFF", // white body text

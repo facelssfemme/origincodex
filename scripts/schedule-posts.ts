@@ -270,6 +270,13 @@ async function scheduleBlotatoPost(
       },
       target: {
         targetType: "tiktok",
+        privacyLevel: "PUBLIC_TO_EVERYONE",
+        disabledComments: false,
+        disabledDuet: false,
+        disabledStitch: false,
+        isBrandedContent: false,
+        isYourBrand: true,
+        isAiGenerated: false,
       },
     },
   };

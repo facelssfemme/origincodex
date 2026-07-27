@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState, useCallback, useEffect, useRef } from "react";
 import { scoreQuiz, archetypeStars, type QuizAnswers, type Archetype } from "~/utils/scoring";
 import { createCheckoutSession } from "~/utils/stripe-checkout";
+import { saveQuizSession } from "~/utils/quiz-session";
 
 export const Route = createFileRoute("/quiz")({
   component: QuizPage,
@@ -15,6 +16,8 @@ type Step =
   | "nightSky"
   | "dreams"
   | "recharge"
+  | "empathy"
+  | "soulAge"
   | "reading"
   | "reveal";
 
@@ -28,10 +31,13 @@ interface FormState {
   nightSky: number | null;
   dreams: number | null;
   recharge: number | null;
+  empathy: number | null;
+  soulAge: number | null;
 }
 
 function QuizPage() {
   const navigate = useNavigate();
+
   const [step, setStep] = useState<Step>("name");
   const [form, setForm] = useState<FormState>({
     name: "",
@@ -43,6 +49,8 @@ function QuizPage() {
     nightSky: null,
     dreams: null,
     recharge: null,
+    empathy: null,
+    soulAge: null,
   });
   const [animating, setAnimating] = useState(false);
   const [result, setResult] = useState<ReturnType<typeof scoreQuiz> | null>(null);
@@ -85,7 +93,7 @@ function QuizPage() {
 
   const handleAnswer = (field: keyof FormState, value: number) => {
     setForm((prev) => ({ ...prev, [field]: value }));
-    const stepOrder: Step[] = ["name", "birthdate", "belonging", "intensity", "nightSky", "dreams", "recharge", "reading", "reveal"];
+    const stepOrder: Step[] = ["name", "birthdate", "belonging", "intensity", "nightSky", "dreams", "recharge", "empathy", "soulAge", "reading", "reveal"];
     const currentIdx = stepOrder.indexOf(step);
     if (currentIdx < stepOrder.length - 1 && step !== "reading" && step !== "reveal") {
       setTimeout(() => transitionTo(stepOrder[currentIdx + 1]), 200);
@@ -98,7 +106,9 @@ function QuizPage() {
       form.intensity === null ||
       form.nightSky === null ||
       form.dreams === null ||
-      form.recharge === null
+      form.recharge === null ||
+      form.empathy === null ||
+      form.soulAge === null
     )
       return;
 
@@ -115,6 +125,8 @@ function QuizPage() {
         nightSky: form.nightSky!,
         dreams: form.dreams!,
         recharge: form.recharge!,
+        empathy: form.empathy!,
+        soulAge: form.soulAge!,
       };
       const computed = scoreQuiz(answers);
       setResult(computed);
@@ -125,7 +137,7 @@ function QuizPage() {
   const handleUnlock = async () => {
     if (!result) return;
 
-    // Save quiz data to localStorage before redirect
+    // Build quiz data payload
     const quizData = {
       name: form.name,
       archetype: result.primaryArchetype,
@@ -141,11 +153,19 @@ function QuizPage() {
         nightSky: form.nightSky,
         dreams: form.dreams,
         recharge: form.recharge,
+        empathy: form.empathy,
+        soulAge: form.soulAge,
       },
     };
-    localStorage.setItem("syrena_quiz_data", JSON.stringify(quizData));
 
     try {
+      // Save quiz data server-side and get a one-time token
+      const { token } = await saveQuizSession({ data: quizData });
+
+      // Store only the token in localStorage (not the full quiz data)
+      localStorage.setItem("syrena_quiz_token", token);
+
+      // Redirect to Stripe checkout
       const { url } = await createCheckoutSession({ data: { includeShadow: addShadowOrigin } });
       if (url) {
         window.location.href = url;
@@ -177,7 +197,7 @@ function QuizPage() {
       {step !== "reading" && step !== "reveal" && step !== "name" && (
         <button
           onClick={() => {
-            const stepOrder: Step[] = ["name", "birthdate", "belonging", "intensity", "nightSky", "dreams", "recharge", "reading", "reveal"];
+            const stepOrder: Step[] = ["name", "birthdate", "belonging", "intensity", "nightSky", "dreams", "recharge", "empathy", "soulAge", "reading", "reveal"];
             const idx = stepOrder.indexOf(step);
             if (idx > 0) transitionTo(stepOrder[idx - 1]);
           }}
@@ -257,9 +277,9 @@ function QuizPage() {
                 className="flex-1 px-4 py-4 rounded-2xl bg-white/5 border border-white/10 text-white text-center focus:outline-none focus:border-violet-500/50 transition-all appearance-none"
               >
                 <option value="" className="bg-[#1a0533]">Year</option>
-                {Array.from({ length: 60 }, (_, i) => (
-                  <option key={i} value={1965 + i} className="bg-[#1a0533]">
-                    {1965 + i}
+                {Array.from({ length: 95 }, (_, i) => (
+                  <option key={i} value={1930 + i} className="bg-[#1a0533]">
+                    {1930 + i}
                   </option>
                 ))}
               </select>
@@ -379,9 +399,54 @@ function QuizPage() {
               ].map((opt) => (
                 <button
                   key={opt.value}
+                  onClick={() => handleAnswer("recharge", opt.value)}
+                  className="w-full py-4 px-6 rounded-xl bg-white/5 border border-white/10 text-white/80 hover:bg-violet-600/20 hover:border-violet-500/40 transition-all text-left"
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {step === "empathy" && (
+          <div className="flex flex-col items-center gap-8 text-center">
+            <h2 className="text-2xl sm:text-3xl font-light text-white leading-snug">
+              How do you experience<br />other people's emotions?
+            </h2>
+            <div className="flex flex-col gap-3 w-full max-w-xs">
+              {[
+                { label: "I feel them as if they're my own", value: 0 },
+                { label: "I sense them but can keep distance", value: 1 },
+                { label: "I'm usually focused on my own energy", value: 2 },
+              ].map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => handleAnswer("empathy", opt.value)}
+                  className="w-full py-4 px-6 rounded-xl bg-white/5 border border-white/10 text-white/80 hover:bg-violet-600/20 hover:border-violet-500/40 transition-all text-left"
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {step === "soulAge" && (
+          <div className="flex flex-col items-center gap-8 text-center">
+            <h2 className="text-2xl sm:text-3xl font-light text-white leading-snug">
+              Do you feel like your soul<br />is older than your body?
+            </h2>
+            <div className="flex flex-col gap-3 w-full max-w-xs">
+              {[
+                { label: "Yes — I've always felt ancient", value: 0 },
+                { label: "Sometimes — I feel wise beyond my years", value: 1 },
+                { label: "No — I feel my age", value: 2 },
+              ].map((opt) => (
+                <button
+                  key={opt.value}
                   onClick={() => {
-                    setForm((p) => ({ ...p, recharge: opt.value }));
-                    // Delay submission to show last answer
+                    setForm((p) => ({ ...p, soulAge: opt.value }));
                     setTimeout(handleSubmitQuiz, 200);
                   }}
                   className="w-full py-4 px-6 rounded-xl bg-white/5 border border-white/10 text-white/80 hover:bg-violet-600/20 hover:border-violet-500/40 transition-all text-left"

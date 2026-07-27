@@ -20,6 +20,8 @@ export interface QuizAnswers {
   nightSky: number; // 0=Deeply at home, 1=Curious but distant, 2=Awestruck but small
   dreams: number; // 0=All the time, 1=Occasionally, 2=Rarely
   recharge: number; // 0=Nature alone, 1=With close people, 2=Creative flow
+  empathy: number; // 0=Feel as my own, 1=Sense but keep distance, 2=Focused on my own energy
+  soulAge: number; // 0=Always felt ancient, 1=Sometimes wise beyond years, 2=Feel my age
 }
 
 export interface QuizResult {
@@ -86,6 +88,28 @@ const rechargeScores: Record<Archetype, number[]> = {
   "Angelic Realm": [2, 1, 2],
 };
 
+const empathyScores: Record<Archetype, number[]> = {
+  Sirian: [2, 1, 0],
+  Pleiadian: [3, 2, 0],
+  Arcturian: [1, 2, 1],
+  Lyran: [0, 2, 2],
+  Andromedan: [1, 3, 1],
+  Orion: [0, 1, 3],
+  "Earth Angel": [3, 1, 0],
+  "Angelic Realm": [2, 3, 0],
+};
+
+const soulAgeScores: Record<Archetype, number[]> = {
+  Sirian: [3, 1, 0],
+  Pleiadian: [2, 2, 0],
+  Arcturian: [3, 1, 0],
+  Lyran: [2, 3, 0],
+  Andromedan: [2, 2, 1],
+  Orion: [1, 2, 2],
+  "Earth Angel": [1, 2, 2],
+  "Angelic Realm": [3, 1, 0],
+};
+
 const allArchetypes: Archetype[] = [
   "Sirian",
   "Pleiadian",
@@ -144,6 +168,8 @@ export function scoreQuiz(answers: QuizAnswers): QuizResult {
     scores[arch] += nightSkyScores[arch][answers.nightSky];
     scores[arch] += dreamsScores[arch][answers.dreams];
     scores[arch] += rechargeScores[arch][answers.recharge];
+    scores[arch] += empathyScores[arch][answers.empathy];
+    scores[arch] += soulAgeScores[arch][answers.soulAge];
   }
 
   // Sort by score descending

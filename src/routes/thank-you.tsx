@@ -42,8 +42,19 @@ function ThankYouPage() {
 
     async function startPipeline() {
       try {
-        // Read token from localStorage (NOT the full quiz data)
-        const token = localStorage.getItem("syrena_quiz_token");
+        // Gate 2: Require Stripe session_id to be present
+        // Without it, the user didn't complete payment — refuse to generate a reading
+        if (!session_id) {
+          console.log("No Stripe session_id found — payment not confirmed");
+          setPhase("error");
+          return;
+        }
+
+        console.log("Stripe session ID:", session_id);
+
+        // Gate 1: Read token from sessionStorage (NOT localStorage)
+        // sessionStorage persists across same-tab redirects but vanishes when tab closes
+        const token = sessionStorage.getItem("syrena_quiz_token");
         let data: QuizData | null = null;
 
         if (token) {
@@ -60,13 +71,9 @@ function ThankYouPage() {
             return;
           }
         } else {
-          // No token found — user navigated here without paying
+          // No token found — user navigated here without completing quiz first
           setPhase("error");
           return;
-        }
-
-        if (session_id) {
-          console.log("Stripe session ID:", session_id);
         }
 
         // Phase 1: Show animation briefly
@@ -112,7 +119,7 @@ function ThankYouPage() {
           }
 
           // Clear the token after successful reading generation (one-time use, already consumed)
-          localStorage.removeItem("syrena_quiz_token");
+          sessionStorage.removeItem("syrena_quiz_token");
 
           setPhase("complete");
         } else {
@@ -265,8 +272,7 @@ function ThankYouPage() {
             </p>
             <button
               onClick={() => {
-                localStorage.removeItem("syrena_quiz_token");
-                localStorage.removeItem("syrena_quiz_data");
+                sessionStorage.removeItem("syrena_quiz_token");
                 navigate({ to: "/quiz" });
               }}
               className="glow-button px-8 py-3 rounded-xl text-white font-medium cursor-pointer transition-all duration-300 hover:scale-[1.02] active:scale-[0.98]"
@@ -277,8 +283,7 @@ function ThankYouPage() {
 
           <button
             onClick={() => {
-              localStorage.removeItem("syrena_quiz_token");
-              localStorage.removeItem("syrena_quiz_data");
+              sessionStorage.removeItem("syrena_quiz_token");
               navigate({ to: "/" });
             }}
             className="text-sm text-gray-500/60 hover:text-gray-400 transition-colors"
@@ -501,8 +506,7 @@ function ThankYouPage() {
         <div className="text-center pb-8">
           <button
             onClick={() => {
-              localStorage.removeItem("syrena_quiz_token");
-              localStorage.removeItem("syrena_quiz_data");
+              sessionStorage.removeItem("syrena_quiz_token");
               navigate({ to: "/" });
             }}
             className="text-sm text-gray-500/60 hover:text-gray-400 transition-colors"

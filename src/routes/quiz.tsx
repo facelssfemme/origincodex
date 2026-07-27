@@ -162,8 +162,8 @@ function QuizPage() {
       // Save quiz data server-side and get a one-time token
       const { token } = await saveQuizSession({ data: quizData });
 
-      // Store only the token in localStorage (not the full quiz data)
-      localStorage.setItem("syrena_quiz_token", token);
+      // Store only the token in sessionStorage (not the full quiz data)
+      sessionStorage.setItem("syrena_quiz_token", token);
 
       // Redirect to Stripe checkout
       const { url } = await createCheckoutSession({ data: { includeShadow: addShadowOrigin } });

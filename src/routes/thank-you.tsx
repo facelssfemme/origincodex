@@ -52,26 +52,45 @@ function ThankYouPage() {
 
         console.log("Stripe session ID:", session_id);
 
-        // Gate 1: Read token from sessionStorage (NOT localStorage)
-        // sessionStorage persists across same-tab redirects but vanishes when tab closes
+        // Gate 1: Try to retrieve quiz data. Preferred path is server-side token
+        // retrieval (requires DATABASE_URL). Fallback: read directly from sessionStorage.
         const token = sessionStorage.getItem("syrena_quiz_token");
         let data: QuizData | null = null;
 
         if (token) {
-          // Retrieve quiz data from server using the one-time token
-          const result = await retrieveQuizSession({ data: { token } });
+          // Try server-side retrieval using the one-time token
+          try {
+            const result = await retrieveQuizSession({ data: { token } });
 
-          if (result.quizData) {
-            data = result.quizData;
-            setQuizData(data);
-          } else {
-            // Token invalid or expired
-            console.log("Quiz session retrieval failed:", result.error);
-            setPhase("error");
-            return;
+            if (result.quizData) {
+              data = result.quizData;
+              setQuizData(data);
+            } else {
+              console.log("Quiz session retrieval failed:", result.error);
+              // Fall through to sessionStorage fallback
+            }
+          } catch (err) {
+            // Server-side retrieval failed (e.g. no database) — fall through to sessionStorage
+            console.warn("retrieveQuizSession failed:", (err as Error).message);
           }
-        } else {
-          // No token found — user navigated here without completing quiz first
+        }
+
+        // Fallback: read quiz data directly from sessionStorage
+        if (!data) {
+          const stored = sessionStorage.getItem("syrena_quiz_data");
+          if (stored) {
+            try {
+              data = JSON.parse(stored) as QuizData;
+              setQuizData(data);
+              console.log("Using sessionStorage fallback for quiz data");
+            } catch {
+              console.error("Failed to parse sessionStorage quiz data");
+            }
+          }
+        }
+
+        // If we still don't have data, show error
+        if (!data) {
           setPhase("error");
           return;
         }
@@ -118,8 +137,9 @@ function ThankYouPage() {
             setAudioReady(true);
           }
 
-          // Clear the token after successful reading generation (one-time use, already consumed)
+          // Clear the token and fallback data after successful reading generation
           sessionStorage.removeItem("syrena_quiz_token");
+          sessionStorage.removeItem("syrena_quiz_data");
 
           setPhase("complete");
         } else {
@@ -273,6 +293,7 @@ function ThankYouPage() {
             <button
               onClick={() => {
                 sessionStorage.removeItem("syrena_quiz_token");
+                sessionStorage.removeItem("syrena_quiz_data");
                 navigate({ to: "/quiz" });
               }}
               className="glow-button px-8 py-3 rounded-xl text-white font-medium cursor-pointer transition-all duration-300 hover:scale-[1.02] active:scale-[0.98]"
@@ -284,6 +305,7 @@ function ThankYouPage() {
           <button
             onClick={() => {
               sessionStorage.removeItem("syrena_quiz_token");
+              sessionStorage.removeItem("syrena_quiz_data");
               navigate({ to: "/" });
             }}
             className="text-sm text-gray-500/60 hover:text-gray-400 transition-colors"
@@ -507,6 +529,7 @@ function ThankYouPage() {
           <button
             onClick={() => {
               sessionStorage.removeItem("syrena_quiz_token");
+              sessionStorage.removeItem("syrena_quiz_data");
               navigate({ to: "/" });
             }}
             className="text-sm text-gray-500/60 hover:text-gray-400 transition-colors"

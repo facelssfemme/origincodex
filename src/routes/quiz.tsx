@@ -158,20 +158,31 @@ function QuizPage() {
       },
     };
 
+    // Always store quiz data in sessionStorage as fallback
+    // (survives same-tab redirects, cleared when tab closes)
+    sessionStorage.setItem("syrena_quiz_data", JSON.stringify(quizData));
+
     try {
-      // Save quiz data server-side and get a one-time token
+      // Save quiz data server-side and get a one-time token (requires DATABASE_URL)
       const { token } = await saveQuizSession({ data: quizData });
 
-      // Store only the token in sessionStorage (not the full quiz data)
+      // Store the token for server-side retrieval on thank-you page
       sessionStorage.setItem("syrena_quiz_token", token);
+    } catch (error) {
+      // Database not available — quiz data is already in sessionStorage as fallback.
+      // This is expected when DATABASE_URL is not configured. The thank-you page
+      // will use sessionStorage data directly when no token is present.
+      console.warn("saveQuizSession failed (DB may not be connected), using sessionStorage fallback:", (error as Error).message);
+    }
 
+    try {
       // Redirect to Stripe checkout
       const { url } = await createCheckoutSession({ data: { includeShadow: addShadowOrigin } });
       if (url) {
         window.location.href = url;
       }
     } catch (error) {
-      console.error("Checkout error:", error);
+      console.error("Checkout redirect error:", error);
     }
   };
 
@@ -549,7 +560,11 @@ function QuizPage() {
             </button>
 
             <button
-              onClick={() => navigate({ to: "/" })}
+              onClick={() => {
+                sessionStorage.removeItem("syrena_quiz_token");
+                sessionStorage.removeItem("syrena_quiz_data");
+                navigate({ to: "/" });
+              }}
               className="text-sm text-gray-500/60 hover:text-gray-400 transition-colors"
             >
               ← Take the quiz again

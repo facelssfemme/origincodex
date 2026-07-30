@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState, useCallback, useEffect, useRef } from "react";
-import { scoreQuiz, archetypeStars, type QuizAnswers, type Archetype } from "~/utils/scoring";
+import { scoreQuiz, archetypeStars, archetypeDescriptions, type QuizAnswers, type Archetype } from "~/utils/scoring";
 import { createCheckoutSession } from "~/utils/stripe-checkout";
 import { saveQuizSession } from "~/utils/quiz-session";
 
@@ -55,7 +55,17 @@ function QuizPage() {
   const [animating, setAnimating] = useState(false);
   const [result, setResult] = useState<ReturnType<typeof scoreQuiz> | null>(null);
   const [addShadowOrigin, setAddShadowOrigin] = useState(false);
+  const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+
+  // Progress bar: 9 steps (name → 7 trait questions → birthdate)
+  const PROGRESS_STEPS: Step[] = [
+    "name", "belonging", "intensity", "nightSky", "dreams",
+    "recharge", "empathy", "soulAge", "birthdate",
+  ];
+  const stepIndex = PROGRESS_STEPS.indexOf(step);
+  const totalProgressSteps = PROGRESS_STEPS.length;
+  const progressPct = stepIndex >= 0 ? Math.round((stepIndex / (totalProgressSteps - 1)) * 100) : 0;
 
   const transitionTo = useCallback((nextStep: Step) => {
     setAnimating(true);
@@ -84,23 +94,12 @@ function QuizPage() {
   const handleStart = () => transitionTo("name");
 
   const handleNameSubmit = () => {
-    if (form.name.trim()) transitionTo("birthdate");
+    if (form.name.trim()) transitionTo("belonging");
   };
 
   const handleBirthdateSubmit = () => {
-    if (form.birthMonth && form.birthDay) transitionTo("belonging");
-  };
-
-  const handleAnswer = (field: keyof FormState, value: number) => {
-    setForm((prev) => ({ ...prev, [field]: value }));
-    const stepOrder: Step[] = ["name", "birthdate", "belonging", "intensity", "nightSky", "dreams", "recharge", "empathy", "soulAge", "reading", "reveal"];
-    const currentIdx = stepOrder.indexOf(step);
-    if (currentIdx < stepOrder.length - 1 && step !== "reading" && step !== "reveal") {
-      setTimeout(() => transitionTo(stepOrder[currentIdx + 1]), 200);
-    }
-  };
-
-  const handleSubmitQuiz = () => {
+    if (!form.birthMonth || !form.birthDay) return;
+    // All trait answers must be complete
     if (
       form.belonging === null ||
       form.intensity === null ||
@@ -132,6 +131,20 @@ function QuizPage() {
       setResult(computed);
       transitionTo("reveal");
     }, 2500);
+  };
+
+  const handleAnswer = (field: keyof FormState, value: number) => {
+    if (animating) return; // Prevent double-clicks during transition
+    setForm((prev) => ({ ...prev, [field]: value }));
+    setSelectedAnswer(field);
+    const stepOrder: Step[] = ["belonging", "intensity", "nightSky", "dreams", "recharge", "empathy", "soulAge"];
+    const currentIdx = stepOrder.indexOf(step as typeof stepOrder[number]);
+    if (currentIdx >= 0 && currentIdx < stepOrder.length - 1) {
+      transitionTo(stepOrder[currentIdx + 1]);
+    } else if (currentIdx === stepOrder.length - 1 || step === "soulAge") {
+      // Last trait question → go to birthdate
+      transitionTo("birthdate");
+    }
   };
 
   const handleUnlock = async () => {
@@ -208,9 +221,10 @@ function QuizPage() {
       {step !== "reading" && step !== "reveal" && step !== "name" && (
         <button
           onClick={() => {
-            const stepOrder: Step[] = ["name", "birthdate", "belonging", "intensity", "nightSky", "dreams", "recharge", "empathy", "soulAge", "reading", "reveal"];
-            const idx = stepOrder.indexOf(step);
+            const stepOrder: Step[] = ["belonging", "intensity", "nightSky", "dreams", "recharge", "empathy", "soulAge", "birthdate"];
+            const idx = stepOrder.indexOf(step as typeof stepOrder[number]);
             if (idx > 0) transitionTo(stepOrder[idx - 1]);
+            else if (step === "belonging") transitionTo("name");
           }}
           className="absolute top-6 left-6 z-20 text-gray-400 hover:text-white transition-colors text-sm"
         >
@@ -219,6 +233,30 @@ function QuizPage() {
       )}
 
       <div className="relative z-10 w-full max-w-md" ref={contentRef}>
+        {/* Progress bar — hidden on reading/reveal */}
+        {step !== "reading" && step !== "reveal" && (
+          <div className="mb-8 w-full">
+            <div className="flex justify-between items-center gap-1 mb-2">
+              {PROGRESS_STEPS.map((s, i) => (
+                <div
+                  key={s}
+                  className={`h-1 flex-1 rounded-full transition-all duration-500 ${
+                    i <= stepIndex
+                      ? "bg-gradient-to-r from-violet-500 to-violet-400 shadow-[0_0_6px_rgba(139,92,246,0.5)]"
+                      : "bg-white/10"
+                  }`}
+                />
+              ))}
+            </div>
+            <div className="flex justify-between px-0.5">
+              <span className="text-[10px] text-gray-500/60">Start</span>
+              <span className="text-[10px] text-gray-500/60">
+                {stepIndex + 1} of {totalProgressSteps}
+              </span>
+            </div>
+          </div>
+        )}
+
         {step === "name" && (
           <div className="flex flex-col items-center gap-8 text-center">
             <h2 className="text-2xl sm:text-3xl font-light text-white">
@@ -319,7 +357,12 @@ function QuizPage() {
                 <button
                   key={opt.value}
                   onClick={() => handleAnswer("belonging", opt.value)}
-                  className="w-full py-4 px-6 rounded-xl bg-white/5 border border-white/10 text-white/80 hover:bg-violet-600/20 hover:border-violet-500/40 transition-all text-left"
+                  disabled={animating}
+                  className={`w-full py-4 px-6 rounded-xl bg-white/5 border text-white/80 transition-all text-left ${
+                    animating
+                      ? "border-white/5 opacity-50 cursor-not-allowed"
+                      : "border-white/10 hover:bg-violet-600/20 hover:border-violet-500/40 cursor-pointer"
+                  } ${selectedAnswer === "belonging" ? "border-violet-500/60 bg-violet-600/20" : ""}`}
                 >
                   {opt.label}
                 </button>
@@ -342,7 +385,12 @@ function QuizPage() {
                 <button
                   key={opt.value}
                   onClick={() => handleAnswer("intensity", opt.value)}
-                  className="w-full py-4 px-6 rounded-xl bg-white/5 border border-white/10 text-white/80 hover:bg-violet-600/20 hover:border-violet-500/40 transition-all text-left"
+                  disabled={animating}
+                  className={`w-full py-4 px-6 rounded-xl bg-white/5 border text-white/80 transition-all text-left ${
+                    animating
+                      ? "border-white/5 opacity-50 cursor-not-allowed"
+                      : "border-white/10 hover:bg-violet-600/20 hover:border-violet-500/40 cursor-pointer"
+                  } ${selectedAnswer === "intensity" ? "border-violet-500/60 bg-violet-600/20" : ""}`}
                 >
                   {opt.label}
                 </button>
@@ -365,7 +413,12 @@ function QuizPage() {
                 <button
                   key={opt.value}
                   onClick={() => handleAnswer("nightSky", opt.value)}
-                  className="w-full py-4 px-6 rounded-xl bg-white/5 border border-white/10 text-white/80 hover:bg-violet-600/20 hover:border-violet-500/40 transition-all text-left"
+                  disabled={animating}
+                  className={`w-full py-4 px-6 rounded-xl bg-white/5 border text-white/80 transition-all text-left ${
+                    animating
+                      ? "border-white/5 opacity-50 cursor-not-allowed"
+                      : "border-white/10 hover:bg-violet-600/20 hover:border-violet-500/40 cursor-pointer"
+                  } ${selectedAnswer === "nightSky" ? "border-violet-500/60 bg-violet-600/20" : ""}`}
                 >
                   {opt.label}
                 </button>
@@ -388,7 +441,12 @@ function QuizPage() {
                 <button
                   key={opt.value}
                   onClick={() => handleAnswer("dreams", opt.value)}
-                  className="w-full py-4 px-6 rounded-xl bg-white/5 border border-white/10 text-white/80 hover:bg-violet-600/20 hover:border-violet-500/40 transition-all text-left"
+                  disabled={animating}
+                  className={`w-full py-4 px-6 rounded-xl bg-white/5 border text-white/80 transition-all text-left ${
+                    animating
+                      ? "border-white/5 opacity-50 cursor-not-allowed"
+                      : "border-white/10 hover:bg-violet-600/20 hover:border-violet-500/40 cursor-pointer"
+                  } ${selectedAnswer === "dreams" ? "border-violet-500/60 bg-violet-600/20" : ""}`}
                 >
                   {opt.label}
                 </button>
@@ -411,7 +469,12 @@ function QuizPage() {
                 <button
                   key={opt.value}
                   onClick={() => handleAnswer("recharge", opt.value)}
-                  className="w-full py-4 px-6 rounded-xl bg-white/5 border border-white/10 text-white/80 hover:bg-violet-600/20 hover:border-violet-500/40 transition-all text-left"
+                  disabled={animating}
+                  className={`w-full py-4 px-6 rounded-xl bg-white/5 border text-white/80 transition-all text-left ${
+                    animating
+                      ? "border-white/5 opacity-50 cursor-not-allowed"
+                      : "border-white/10 hover:bg-violet-600/20 hover:border-violet-500/40 cursor-pointer"
+                  } ${selectedAnswer === "recharge" ? "border-violet-500/60 bg-violet-600/20" : ""}`}
                 >
                   {opt.label}
                 </button>
@@ -434,7 +497,12 @@ function QuizPage() {
                 <button
                   key={opt.value}
                   onClick={() => handleAnswer("empathy", opt.value)}
-                  className="w-full py-4 px-6 rounded-xl bg-white/5 border border-white/10 text-white/80 hover:bg-violet-600/20 hover:border-violet-500/40 transition-all text-left"
+                  disabled={animating}
+                  className={`w-full py-4 px-6 rounded-xl bg-white/5 border text-white/80 transition-all text-left ${
+                    animating
+                      ? "border-white/5 opacity-50 cursor-not-allowed"
+                      : "border-white/10 hover:bg-violet-600/20 hover:border-violet-500/40 cursor-pointer"
+                  } ${selectedAnswer === "empathy" ? "border-violet-500/60 bg-violet-600/20" : ""}`}
                 >
                   {opt.label}
                 </button>
@@ -456,11 +524,13 @@ function QuizPage() {
               ].map((opt) => (
                 <button
                   key={opt.value}
-                  onClick={() => {
-                    setForm((p) => ({ ...p, soulAge: opt.value }));
-                    setTimeout(handleSubmitQuiz, 200);
-                  }}
-                  className="w-full py-4 px-6 rounded-xl bg-white/5 border border-white/10 text-white/80 hover:bg-violet-600/20 hover:border-violet-500/40 transition-all text-left"
+                  onClick={() => handleAnswer("soulAge", opt.value)}
+                  disabled={animating}
+                  className={`w-full py-4 px-6 rounded-xl bg-white/5 border text-white/80 transition-all text-left ${
+                    animating
+                      ? "border-white/5 opacity-50 cursor-not-allowed"
+                      : "border-white/10 hover:bg-violet-600/20 hover:border-violet-500/40 cursor-pointer"
+                  } ${selectedAnswer === "soulAge" ? "border-violet-500/60 bg-violet-600/20" : ""}`}
                 >
                   {opt.label}
                 </button>
@@ -489,7 +559,12 @@ function QuizPage() {
           </div>
         )}
 
-        {step === "reveal" && result && (
+        {step === "reveal" && result && (() => {
+            const fullDesc = archetypeDescriptions[result.primaryArchetype] || "";
+            const firstSentence = fullDesc.split(". ")[0] + ".";
+            const restOfReading = fullDesc.slice(firstSentence.length).trim();
+
+            return (
           <div className="flex flex-col items-center gap-6 text-center">
             <div className="cosmic-card rounded-3xl p-8 w-full">
               <p className="text-sm text-gray-400/70 mb-2">
@@ -504,24 +579,28 @@ function QuizPage() {
                 ...
               </p>
 
-              <div className="blur-reveal relative overflow-hidden">
-                <div className="filter blur-sm select-none">
-                  <p className="text-sm text-white/50 font-light leading-relaxed">
-                    The {result.primaryArchetype} frequency resonates within your
-                    soul's core. This starseed lineage carries a unique signature
-                    that shapes how you experience the world. Your sun in{" "}
-                    {result.sunSign} adds a layer of cosmic texture that
-                    influences your expression. The full reading reveals your
-                    complete starseed profile, including your shadow origin and
-                    the mission your soul chose before incarnating. This is only
-                    the beginning of your remembrance.
-                  </p>
+              {/* First sentence visible — teaser */}
+              <p className="text-sm text-white/80 font-light leading-relaxed mb-4 italic">
+                {firstSentence}
+              </p>
+
+              {/* Rest blurred */}
+              {restOfReading && (
+                <div className="blur-reveal relative overflow-hidden">
+                  <div className="filter blur-sm select-none">
+                    <p className="text-sm text-white/50 font-light leading-relaxed">
+                      {restOfReading} The full reading reveals your complete
+                      starseed profile, including your shadow origin and the
+                      mission your soul chose before incarnating. This is only the
+                      beginning of your remembrance.
+                    </p>
+                  </div>
                 </div>
-              </div>
+              )}
 
               <div className="mt-6 pt-6 border-t border-white/5">
                 <p className="text-xs text-gray-500/60 mb-1">
-                  {result.secondaryArchetype} influence detected
+                  {result.primaryArchetype} resonance confirmed
                 </p>
                 <div className="flex justify-center gap-1.5 mt-3">
                   <span className="text-gold text-xs">✦</span>
@@ -570,7 +649,8 @@ function QuizPage() {
               ← Take the quiz again
             </button>
           </div>
-        )}
+            );
+          })()}
       </div>
     </main>
   );

@@ -18,6 +18,7 @@ type Step =
   | "recharge"
   | "empathy"
   | "soulAge"
+  | "email"
   | "reading"
   | "reveal";
 
@@ -26,6 +27,7 @@ interface FormState {
   birthMonth: string;
   birthDay: string;
   birthYear: string;
+  email: string;
   belonging: number | null;
   intensity: number | null;
   nightSky: number | null;
@@ -44,6 +46,7 @@ function QuizPage() {
     birthMonth: "",
     birthDay: "",
     birthYear: "",
+    email: "",
     belonging: null,
     intensity: null,
     nightSky: null,
@@ -58,10 +61,10 @@ function QuizPage() {
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
-  // Progress bar: 9 steps (name → 7 trait questions → birthdate)
+  // Progress bar: 10 steps (name → 7 trait questions → birthdate → email)
   const PROGRESS_STEPS: Step[] = [
     "name", "belonging", "intensity", "nightSky", "dreams",
-    "recharge", "empathy", "soulAge", "birthdate",
+    "recharge", "empathy", "soulAge", "birthdate", "email",
   ];
   const stepIndex = PROGRESS_STEPS.indexOf(step);
   const totalProgressSteps = PROGRESS_STEPS.length;
@@ -111,6 +114,10 @@ function QuizPage() {
     )
       return;
 
+    transitionTo("email");
+  };
+
+  const handleEmailContinue = () => {
     transitionTo("reading");
 
     // After 2.5 seconds, compute result and show reveal
@@ -153,6 +160,7 @@ function QuizPage() {
     // Build quiz data payload
     const quizData = {
       name: form.name,
+      email: form.email,
       archetype: result.primaryArchetype,
       secondaryArchetype: result.secondaryArchetype,
       sunSign: result.sunSign,
@@ -221,7 +229,7 @@ function QuizPage() {
       {step !== "reading" && step !== "reveal" && step !== "name" && (
         <button
           onClick={() => {
-            const stepOrder: Step[] = ["belonging", "intensity", "nightSky", "dreams", "recharge", "empathy", "soulAge", "birthdate"];
+            const stepOrder: Step[] = ["belonging", "intensity", "nightSky", "dreams", "recharge", "empathy", "soulAge", "birthdate", "email"];
             const idx = stepOrder.indexOf(step as typeof stepOrder[number]);
             if (idx > 0) transitionTo(stepOrder[idx - 1]);
             else if (step === "belonging") transitionTo("name");
@@ -539,6 +547,38 @@ function QuizPage() {
           </div>
         )}
 
+        {step === "email" && (
+          <div className="flex flex-col items-center gap-8 text-center">
+            <h2 className="text-2xl sm:text-3xl font-light text-white">
+              Want your results emailed to you?
+            </h2>
+            <p className="text-sm text-gray-400/80 -mt-4">
+              Enter your email and we'll send your full reading there too.
+            </p>
+            <input
+              type="email"
+              value={form.email}
+              onChange={(e) => setForm((p) => ({ ...p, email: e.target.value }))}
+              onKeyDown={(e) => e.key === "Enter" && handleEmailContinue()}
+              placeholder="your@email.com"
+              className="w-full max-w-xs px-6 py-4 rounded-2xl bg-white/5 border border-white/10 text-white text-center text-lg placeholder-gray-500/60 focus:outline-none focus:border-violet-500/50 transition-all"
+              autoFocus
+            />
+            <button
+              onClick={handleEmailContinue}
+              className="glow-button px-8 py-3 rounded-xl text-white font-medium cursor-pointer transition-all"
+            >
+              Continue →
+            </button>
+            <button
+              onClick={handleEmailContinue}
+              className="text-sm text-gray-500/50 hover:text-gray-400 transition-colors"
+            >
+              Skip
+            </button>
+          </div>
+        )}
+
         {step === "reading" && (
           <div className="flex flex-col items-center gap-8 text-center">
             <div className="relative w-24 h-24 mb-4">
@@ -636,17 +676,6 @@ function QuizPage() {
               className="glow-button px-10 py-4 rounded-2xl text-white font-medium text-lg tracking-wide transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] cursor-pointer w-full max-w-xs"
             >
               Unlock Your Full Reading — ${addShadowOrigin ? "31" : "19"}
-            </button>
-
-            <button
-              onClick={() => {
-                sessionStorage.removeItem("syrena_quiz_token");
-                sessionStorage.removeItem("syrena_quiz_data");
-                navigate({ to: "/" });
-              }}
-              className="text-sm text-gray-500/60 hover:text-gray-400 transition-colors"
-            >
-              ← Take the quiz again
             </button>
           </div>
             );

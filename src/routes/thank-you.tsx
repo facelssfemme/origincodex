@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from "react";
 import { archetypeStars, archetypeDescriptions, type Archetype } from "~/utils/scoring";
 import { generateReading, generateAudio } from "~/utils/reading-generation";
 import { sendReadingEmail } from "~/utils/email";
+import { sendResultsEmail } from "~/server/send-results-email";
 import { retrieveQuizSession } from "~/utils/quiz-session";
 
 export const Route = createFileRoute("/thank-you")({
@@ -15,6 +16,7 @@ interface ThankYouSearch {
 
 interface QuizData {
   name: string;
+  email?: string;
   archetype: string;
   secondaryArchetype: string;
   sunSign: string;
@@ -35,6 +37,8 @@ function ThankYouPage() {
   const [emailInput, setEmailInput] = useState("");
   const [emailStatus, setEmailStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
   const [emailMessage, setEmailMessage] = useState("");
+  const [autoEmailSent, setAutoEmailSent] = useState(false);
+  const [autoEmailAddress, setAutoEmailAddress] = useState("");
   const shareCardRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -142,6 +146,27 @@ function ThankYouPage() {
           sessionStorage.removeItem("syrena_quiz_data");
 
           setPhase("complete");
+
+          // Auto-send results email if user provided email during quiz
+          if (data.email && data.email.trim()) {
+            sendResultsEmail({
+              data: {
+                email: data.email,
+                userName: data.name,
+                primaryArchetype: data.archetype,
+                secondaryArchetype: data.secondaryArchetype,
+                readingText: readingResult.primaryReading,
+              },
+            }).then((result) => {
+              if (result.sent) {
+                console.log("Results email sent to", data.email);
+                setAutoEmailSent(true);
+                setAutoEmailAddress(data.email!);
+              }
+            }).catch((err) => {
+              console.warn("Failed to send results email:", err);
+            });
+          }
         } else {
           setPhase("error");
         }
@@ -345,6 +370,15 @@ function ThankYouPage() {
           )}
         </div>
 
+        {/* Auto-email confirmation banner */}
+        {autoEmailSent && (
+          <div className="cosmic-card rounded-2xl p-4 w-full text-center border-violet-500/20 bg-violet-600/5">
+            <p className="text-sm text-violet-300/80">
+              ✦ Your reading has been sent to <span className="text-gold">{autoEmailAddress}</span>
+            </p>
+          </div>
+        )}
+
         {/* Main Reading Card */}
         <div className="cosmic-card rounded-3xl p-6 sm:p-8 w-full">
           <div className="prose prose-invert max-w-none">
@@ -525,16 +559,16 @@ function ThankYouPage() {
         </div>
 
         {/* Footer */}
-        <div className="text-center pb-8">
+        <div className="text-center pb-8 pt-8 border-t border-white/[0.04]">
           <button
             onClick={() => {
               sessionStorage.removeItem("syrena_quiz_token");
               sessionStorage.removeItem("syrena_quiz_data");
-              navigate({ to: "/" });
+              navigate({ to: "/quiz" });
             }}
-            className="text-sm text-gray-500/60 hover:text-gray-400 transition-colors"
+            className="text-xs text-gray-500/40 hover:text-gray-400/60 transition-colors"
           >
-            ← Take the quiz again
+            Not your origin? Take the quiz again →
           </button>
         </div>
       </div>

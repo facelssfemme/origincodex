@@ -1,5 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
+import { trackEvent } from "~/utils/analytics";
 
 export const Route = createFileRoute("/")({
   component: Home,
@@ -39,6 +40,23 @@ function Starfield({ count = 60 }: { count?: number }) {
 function Home() {
   const navigate = useNavigate();
   const titleRef = useRef<HTMLHeadingElement>(null);
+
+  // bio_link_click — fired when the landing page is reached from TikTok
+  // (utm_source=tiktok or a tiktok.com referrer), with post attribution.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const utmSource = params.get("utm_source")?.trim().toLowerCase();
+    const fromTikTok = utmSource === "tiktok" ||
+      (typeof document !== "undefined" && document.referrer.includes("tiktok.com"));
+    if (fromTikTok) {
+      trackEvent("bio_link_click", {
+        utm_campaign: params.get("utm_campaign") ?? null,
+        utm_content: params.get("utm_content") ?? null,
+        utm_medium: params.get("utm_medium") ?? null,
+      });
+    }
+  }, []);
 
   useEffect(() => {
     if (titleRef.current) {

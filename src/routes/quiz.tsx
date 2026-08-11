@@ -3,6 +3,16 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { scoreQuiz, archetypeStars, archetypeDescriptions, type QuizAnswers, type Archetype } from "~/utils/scoring";
 import { createCheckoutSession } from "~/utils/stripe-checkout";
 import { saveQuizSession } from "~/utils/quiz-session";
+import {
+  trackEvent,
+  startPaywallTracking,
+  stopPaywallHeartbeat,
+  updatePaywallScroll,
+  trackPaywallExit,
+  detectPaymentAbandon,
+  markUnlockClicked,
+  flushEventsNow,
+} from "~/utils/analytics";
 
 export const Route = createFileRoute("/quiz")({
   component: QuizPage,
@@ -61,6 +71,10 @@ function QuizPage() {
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
+  // Analytics refs — ensure each event fires exactly once per session/page view
+  const quizStartedRef = useRef(false);
+  const paywallViewFiredRef = useRef(false);
+
   // Progress bar: 10 steps (name → 7 trait questions → birthdate → email)
   const PROGRESS_STEPS: Step[] = [
     "name", "belonging", "intensity", "nightSky", "dreams",
@@ -77,6 +91,38 @@ function QuizPage() {
       setAnimating(false);
     }, 300);
   }, []);
+
+  // Analytics: on mount, catch a payment_abandon (user clicked unlock earlier
+  // but never completed Stripe and came back). Also fire paywall_abandon on
+  // page exit when the paywall was viewed but unlock was never clicked.
+  useEffect(() => {
+    detectPaymentAbandon();
+    const onPageExit = () => {
+      trackPaywallExit();
+      flushEventsNow();
+    };
+    window.addEventListener("pagehide", onPageExit);
+    window.addEventListener("beforeunload", onPageExit);
+    return () => {
+      window.removeEventListener("pagehide", onPageExit);
+      window.removeEventListener("beforeunload", onPageExit);
+      stopPaywallHeartbeat();
+    };
+  }, []);
+
+  // Analytics: paywall_view fires the moment the blurred reading (reveal) is
+  // displayed. Starts the duration heartbeat + scroll-depth tracking.
+  useEffect(() => {
+    if (step !== "reveal") return;
+    if (!paywallViewFiredRef.current) {
+      paywallViewFiredRef.current = true;
+      startPaywallTracking();
+      trackEvent("paywall_view");
+    }
+    const onScroll = () => updatePaywallScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, [step]);
 
   useEffect(() => {
     if (contentRef.current) {
@@ -114,10 +160,16 @@ function QuizPage() {
     )
       return;
 
+    // Analytics: birthdate is question #8; it is also the final quiz question.
+    trackEvent("quiz_question_complete", { question_number: 8 });
+    trackEvent("quiz_complete");
+
     transitionTo("email");
   };
 
   const handleEmailContinue = () => {
+    // Analytics: email is question #9 (optional — still counts as a step).
+    trackEvent("quiz_question_complete", { question_number: 9 });
     transitionTo("reading");
 
     // After 2.5 seconds, compute result and show reveal
@@ -146,6 +198,17 @@ function QuizPage() {
     setSelectedAnswer(field);
     const stepOrder: Step[] = ["belonging", "intensity", "nightSky", "dreams", "recharge", "empathy", "soulAge"];
     const currentIdx = stepOrder.indexOf(step as typeof stepOrder[number]);
+
+    // Analytics: quiz_start fires on the first question answered (not page
+    // load); every answered trait question is logged with its 1-7 number.
+    if (currentIdx === 0 && !quizStartedRef.current) {
+      quizStartedRef.current = true;
+      trackEvent("quiz_start");
+    }
+    if (currentIdx >= 0) {
+      trackEvent("quiz_question_complete", { question_number: currentIdx + 1 });
+    }
+
     if (currentIdx >= 0 && currentIdx < stepOrder.length - 1) {
       transitionTo(stepOrder[currentIdx + 1]);
     } else if (currentIdx === stepOrder.length - 1 || step === "soulAge") {
@@ -156,6 +219,9 @@ function QuizPage() {
 
   const handleUnlock = async () => {
     if (!result) return;
+
+    // Analytics: user clicked unlock → checkout_started (paywall → Stripe hop).
+    markUnlockClicked(addShadowOrigin);
 
     // Build quiz data payload
     const quizData = {

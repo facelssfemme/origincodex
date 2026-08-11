@@ -5,6 +5,7 @@ import { generateReading, generateAudio } from "~/utils/reading-generation";
 import { sendReadingEmail } from "~/utils/email";
 import { sendResultsEmail } from "~/server/send-results-email";
 import { retrieveQuizSession } from "~/utils/quiz-session";
+import { trackEvent, completePurchaseTracking } from "~/utils/analytics";
 
 export const Route = createFileRoute("/thank-you")({
   component: ThankYouPage,
@@ -40,6 +41,7 @@ function ThankYouPage() {
   const [autoEmailSent, setAutoEmailSent] = useState(false);
   const [autoEmailAddress, setAutoEmailAddress] = useState("");
   const shareCardRef = useRef<HTMLDivElement>(null);
+  const purchaseTrackedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -97,6 +99,22 @@ function ThankYouPage() {
         if (!data) {
           setPhase("error");
           return;
+        }
+
+        // Analytics: payment is confirmed (Stripe session_id gate passed) and we
+        // have the quiz data — fire `purchase` exactly once, carrying the order
+        // bump flag, revenue amount, and (if the user came through the paywall
+        // in this tab) how long they lingered + how far they scrolled.
+        if (!purchaseTrackedRef.current) {
+          purchaseTrackedRef.current = true;
+          const upsellTaken = data.includeShadow === true;
+          const paywall = completePurchaseTracking();
+          trackEvent("purchase", {
+            upsell_taken: upsellTaken,
+            amount: upsellTaken ? 31 : 19,
+            paywall_duration_seconds: paywall.durationSec,
+            scroll_depth_pct: paywall.scrollPct,
+          });
         }
 
         // Phase 1: Show animation briefly

@@ -1,23 +1,6 @@
 import { trackEvents, type TrackedEvent } from "~/server/events";
 
-/**
- * Client-side funnel analytics helper.
- *
- * Usage:
- *   import { trackEvent, startPaywallTracking, ... } from "~/utils/analytics";
- *   trackEvent("quiz_start");
- *   trackEvent("quiz_question_complete", { question_number: 3 });
- *
- * Every event carries an anonymous session id (UUID persisted in
- * sessionStorage — per-tab, survives same-tab redirects like the Stripe
- * checkout hop), an ISO timestamp, device type, traffic source (UTM/referrer),
- * and the page path. Events are batched and POSTed to the server function in
- * src/server/events.ts, which appends them to the JSONL event log.
- *
- * This module touches `window`/`sessionStorage` and must only be called from
- * client code (React effects/handlers) — every accessor guards against SSR.
- */
-
+/** Anonymous, best-effort observations. The server strips all non-allowlisted fields. */
 const SESSION_KEY = "analytics_session_id";
 const PAYWALL_KEY = "syrena_paywall_metrics";
 const UNLOCK_KEY = "syrena_unlock_clicked";
@@ -34,7 +17,10 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 // ─── Identity / context ──────────────────────────────────────────────────────
 
 function uuid(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
     return crypto.randomUUID();
   }
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
@@ -79,7 +65,12 @@ export function getTrafficSource(): string {
   try {
     const params = new URLSearchParams(window.location.search);
     const utm = params.get("utm_source");
-    if (utm && utm.trim()) return utm.trim().toLowerCase();
+    if (utm && utm.trim())
+      return ["tiktok", "instagram", "facebook", "google", "social"].includes(
+        utm.trim().toLowerCase(),
+      )
+        ? utm.trim().toLowerCase()
+        : "other";
 
     const referrer = document.referrer;
     if (!referrer) return "direct";
@@ -87,8 +78,9 @@ export function getTrafficSource(): string {
     if (!host) return "direct";
     if (host.includes("tiktok.com")) return "tiktok";
     if (host.includes("google.")) return "google";
-    if (host.includes("instagram.com") || host.includes("facebook.com")) return "social";
-    return host;
+    if (host.includes("instagram.com") || host.includes("facebook.com"))
+      return "social";
+    return "other";
   } catch {
     return "direct";
   }
@@ -99,16 +91,43 @@ export function getTrafficSource(): string {
 /**
  * Fire a tracked event. Safe to call anywhere in client code; no-op during SSR.
  */
-export function trackEvent(name: string, props: Record<string, unknown> = {}): void {
+export function trackEvent(
+  name: string,
+  props: Record<string, unknown> = {},
+): void {
   if (typeof window === "undefined") return;
+  const aliases: Record<string, string> = {
+    bio_link_click: "landing_view",
+    checkout_started: "checkout_redirect_requested",
+    paywall_abandon: "paywall_exit",
+    payment_abandon: "checkout_return",
+  };
+  name = aliases[name] || name;
+  if (
+    ![
+      "landing_view",
+      "quiz_start",
+      "quiz_question_complete",
+      "quiz_complete",
+      "paywall_view",
+      "checkout_redirect_requested",
+      "paywall_exit",
+      "checkout_return",
+    ].includes(name)
+  )
+    return;
   const ev: TrackedEvent = {
+    event_id: uuid(),
     name,
     timestamp: new Date().toISOString(),
     session_id: getSessionId(),
     device_type: getDeviceType(),
     traffic_source: getTrafficSource(),
-    page: window.location.pathname,
-    props,
+    page: "",
+    props:
+      name === "quiz_question_complete"
+        ? { question_number: props.question_number }
+        : {},
   };
   queue.push(ev);
   scheduleFlush(false);
@@ -131,11 +150,8 @@ function flush(): void {
   if (!queue.length) return;
   const batch = queue.splice(0, MAX_BATCH);
   // Fire-and-forget; a dropped batch is acceptable (analytics is best-effort).
-  trackEvents({ data: { events: batch } }).then((r) => {
-    // no-op (fire-and-forget)
-  }).catch((e) => {
-    console.warn("[analytics] event batch delivery failed", batch.map((x) => x.name), String(e));
-  });
+  void trackEvents({ data: { events: batch } }).catch(() => {});
+  if (queue.length) scheduleFlush(false);
 }
 
 /**
@@ -161,7 +177,11 @@ function readPaywallMetrics(): PaywallMetrics | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<PaywallMetrics>;
     if (typeof parsed.viewTs !== "number") return null;
-    return { viewTs: parsed.viewTs, maxScrollPct: typeof parsed.maxScrollPct === "number" ? parsed.maxScrollPct : 0 };
+    return {
+      viewTs: parsed.viewTs,
+      maxScrollPct:
+        typeof parsed.maxScrollPct === "number" ? parsed.maxScrollPct : 0,
+    };
   } catch {
     return null;
   }
@@ -216,7 +236,10 @@ export function startPaywallTracking(): number | null {
     const mm = readPaywallMetrics();
     if (!mm) return;
     trackEvent("paywall_heartbeat", {
-      paywall_duration_seconds: Math.max(0, Math.round((Date.now() - mm.viewTs) / 1000)),
+      paywall_duration_seconds: Math.max(
+        0,
+        Math.round((Date.now() - mm.viewTs) / 1000),
+      ),
       scroll_depth_pct: mm.maxScrollPct,
     });
   }, HEARTBEAT_MS);
@@ -270,7 +293,10 @@ export function trackPaywallExit(): void {
   if (unlockClicked) return; // headed to Stripe, not an abandon
   stopPaywallHeartbeat();
   trackEvent("paywall_abandon", {
-    paywall_duration_seconds: Math.max(0, Math.round((Date.now() - m.viewTs) / 1000)),
+    paywall_duration_seconds: Math.max(
+      0,
+      Math.round((Date.now() - m.viewTs) / 1000),
+    ),
     scroll_depth_pct: m.maxScrollPct,
   });
   try {
@@ -302,7 +328,9 @@ export function detectPaymentAbandon(): void {
   const m = readPaywallMetrics();
   stopPaywallHeartbeat();
   trackEvent("payment_abandon", {
-    paywall_duration_seconds: m ? Math.max(0, Math.round((Date.now() - m.viewTs) / 1000)) : null,
+    paywall_duration_seconds: m
+      ? Math.max(0, Math.round((Date.now() - m.viewTs) / 1000))
+      : null,
     scroll_depth_pct: m?.maxScrollPct ?? null,
   });
   try {
@@ -317,7 +345,10 @@ export function detectPaymentAbandon(): void {
  * so a later revisit isn't misread as an abandon. Returns the paywall metrics
  * (duration + scroll depth) so the purchase event can carry them.
  */
-export function completePurchaseTracking(): { durationSec: number; scrollPct: number | null } {
+export function completePurchaseTracking(): {
+  durationSec: number;
+  scrollPct: number | null;
+} {
   stopPaywallHeartbeat();
   const m = readPaywallMetrics();
   try {
@@ -327,7 +358,9 @@ export function completePurchaseTracking(): { durationSec: number; scrollPct: nu
     // ignore
   }
   return {
-    durationSec: m ? Math.max(0, Math.round((Date.now() - m.viewTs) / 1000)) : 0,
+    durationSec: m
+      ? Math.max(0, Math.round((Date.now() - m.viewTs) / 1000))
+      : 0,
     scrollPct: m ? m.maxScrollPct : null,
   };
 }

@@ -59,6 +59,7 @@ function RootDocument({ children }: { children: ReactNode }) {
   return (
     <html lang="en" className="dark">
       <head>
+        <meta name="referrer" content="no-referrer" />
         <HeadContent />
       </head>
       <body className="cosmic-gradient min-h-dvh">

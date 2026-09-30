@@ -1,18 +1,18 @@
 import { createServerFn } from "@tanstack/react-start";
-
-// Payment links created via the platform's Stripe integration
-// These are the supported way to accept payments without a server-side secret key
-const PAYMENT_LINK_BASE = "https://buy.stripe.com/00w4gz3lq2TSaLG3oJ2Ry00";
-const PAYMENT_LINK_COMBO = "https://buy.stripe.com/00waEXf48amkdXSbVf2Ry01";
-
 export const createCheckoutSession = createServerFn({ method: "POST" })
-  .validator((d: { includeShadow: boolean; customerEmail?: string }) => d)
+  .validator((d: unknown) => d)
   .handler(async ({ data }) => {
-    // Use pre-created Stripe payment links (platform-managed Stripe, no secret key available)
-    const url = data.includeShadow ? PAYMENT_LINK_COMBO : PAYMENT_LINK_BASE;
-
-    return {
-      url,
-      sessionId: "pay_link",
-    };
+    try {
+      const [{ store }, { stripeGateway }, { checkout }] = await Promise.all([
+        import("../server/orders/store"),
+        import("../server/orders/stripe"),
+        import("../server/orders/checkout"),
+      ]);
+      const gateway = stripeGateway();
+      return await checkout(store(), gateway, data, gateway.config);
+    } catch {
+      throw Error(
+        "Checkout is unavailable. Your quiz is saved; please try again later.",
+      );
+    }
   });

@@ -1,8 +1,8 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useState, useCallback, useEffect, useRef } from "react";
-import { scoreQuiz, archetypeStars, archetypeDescriptions, type QuizAnswers, type Archetype } from "~/utils/scoring";
+import { scoreQuiz, archetypeStars, archetypeDescriptions, type QuizAnswers } from "~/utils/scoring";
 import { createCheckoutSession } from "~/utils/stripe-checkout";
-import { saveQuizSession } from "~/utils/quiz-session";
+import { readQuizDraft, writeQuizDraft, type Step, type FormState } from "~/utils/quiz-draft";
 import {
   trackEvent,
   startPaywallTracking,
@@ -18,37 +18,7 @@ export const Route = createFileRoute("/quiz")({
   component: QuizPage,
 });
 
-type Step =
-  | "name"
-  | "birthdate"
-  | "belonging"
-  | "intensity"
-  | "nightSky"
-  | "dreams"
-  | "recharge"
-  | "empathy"
-  | "soulAge"
-  | "email"
-  | "reading"
-  | "reveal";
-
-interface FormState {
-  name: string;
-  birthMonth: string;
-  birthDay: string;
-  birthYear: string;
-  email: string;
-  belonging: number | null;
-  intensity: number | null;
-  nightSky: number | null;
-  dreams: number | null;
-  recharge: number | null;
-  empathy: number | null;
-  soulAge: number | null;
-}
-
 function QuizPage() {
-  const navigate = useNavigate();
 
   const [step, setStep] = useState<Step>("name");
   const [form, setForm] = useState<FormState>({
@@ -65,11 +35,41 @@ function QuizPage() {
     empathy: null,
     soulAge: null,
   });
+  const checkoutInFlight = useRef(false);
+  const [checkoutBusy, setCheckoutBusy] = useState(false);
+  const [checkoutError, setCheckoutError] = useState("");
+  const [draftLoaded, setDraftLoaded] = useState(false);
   const [animating, setAnimating] = useState(false);
   const [result, setResult] = useState<ReturnType<typeof scoreQuiz> | null>(null);
   const [addShadowOrigin, setAddShadowOrigin] = useState(false);
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+
+  // Restore after hydration so server and initial browser markup agree.
+  useEffect(() => {
+    try {
+      const draft = readQuizDraft(window.sessionStorage);
+      if (draft) {
+        setForm(draft.form);
+        setStep(draft.step);
+        setAddShadowOrigin(draft.addShadowOrigin);
+        if (draft.step === "reveal") {
+          setResult(scoreQuiz({
+            ...draft.form,
+            birthMonth: Number(draft.form.birthMonth),
+            birthDay: Number(draft.form.birthDay),
+          } as QuizAnswers));
+        }
+      }
+    } catch { /* Storage can be disabled; keep the quiz usable. */ }
+    setDraftLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (!draftLoaded) return;
+    try { writeQuizDraft(window.sessionStorage, { step, form, addShadowOrigin }); }
+    catch { /* Storage access itself can throw in restricted browsers. */ }
+  }, [draftLoaded, step, form, addShadowOrigin]);
 
   // Analytics refs — ensure each event fires exactly once per session/page view
   const quizStartedRef = useRef(false);
@@ -82,7 +82,6 @@ function QuizPage() {
   ];
   const stepIndex = PROGRESS_STEPS.indexOf(step);
   const totalProgressSteps = PROGRESS_STEPS.length;
-  const progressPct = stepIndex >= 0 ? Math.round((stepIndex / (totalProgressSteps - 1)) * 100) : 0;
 
   const transitionTo = useCallback((nextStep: Step) => {
     setAnimating(true);
@@ -139,8 +138,6 @@ function QuizPage() {
       });
     }
   }, [step]);
-
-  const handleStart = () => transitionTo("name");
 
   const handleNameSubmit = () => {
     if (form.name.trim()) transitionTo("belonging");
@@ -218,58 +215,39 @@ function QuizPage() {
   };
 
   const handleUnlock = async () => {
-    if (!result) return;
-
-    // Analytics: user clicked unlock → checkout_started (paywall → Stripe hop).
-    markUnlockClicked(addShadowOrigin);
-
-    // Build quiz data payload
-    const quizData = {
-      name: form.name,
-      email: form.email,
-      archetype: result.primaryArchetype,
-      secondaryArchetype: result.secondaryArchetype,
-      sunSign: result.sunSign,
-      includeShadow: addShadowOrigin,
-      answers: {
-        birthMonth: form.birthMonth,
-        birthDay: form.birthDay,
-        birthYear: form.birthYear,
-        belonging: form.belonging,
-        intensity: form.intensity,
-        nightSky: form.nightSky,
-        dreams: form.dreams,
-        recharge: form.recharge,
-        empathy: form.empathy,
-        soulAge: form.soulAge,
-      },
-    };
-
-    // Always store quiz data in sessionStorage as fallback
-    // (survives same-tab redirects, cleared when tab closes)
-    sessionStorage.setItem("syrena_quiz_data", JSON.stringify(quizData));
-
+    if (!result || checkoutInFlight.current) return;
+    checkoutInFlight.current = true;
+    setCheckoutBusy(true);
+    setCheckoutError("");
     try {
-      // Save quiz data server-side and get a one-time token (requires DATABASE_URL)
-      const { token } = await saveQuizSession({ data: quizData });
-
-      // Store the token for server-side retrieval on thank-you page
-      sessionStorage.setItem("syrena_quiz_token", token);
-    } catch (error) {
-      // Database not available — quiz data is already in sessionStorage as fallback.
-      // This is expected when DATABASE_URL is not configured. The thank-you page
-      // will use sessionStorage data directly when no token is present.
-      console.warn("saveQuizSession failed (DB may not be connected), using sessionStorage fallback:", (error as Error).message);
-    }
-
-    try {
-      // Redirect to Stripe checkout
-      const { url } = await createCheckoutSession({ data: { includeShadow: addShadowOrigin } });
-      if (url) {
-        window.location.href = url;
+      writeQuizDraft(window.sessionStorage, { step: "reveal", form, addShadowOrigin });
+      const input = {
+        answers: {
+          name: form.name, birthMonth: Number(form.birthMonth), birthDay: Number(form.birthDay),
+          belonging: form.belonging, intensity: form.intensity, nightSky: form.nightSky,
+          dreams: form.dreams, recharge: form.recharge, empathy: form.empathy, soulAge: form.soulAge,
+        },
+        includeShadow: addShadowOrigin,
+      };
+      const inputKey = JSON.stringify(input);
+      let active;
+      try { active = JSON.parse(sessionStorage.getItem("syrena_checkout_attempt") || "null"); } catch { active = null; }
+      if (!active || active.inputKey !== inputKey) {
+        const accessToken = Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, "0")).join("");
+        active = { orderId: crypto.randomUUID(), accessToken, inputKey };
+        sessionStorage.setItem("syrena_checkout_attempt", JSON.stringify(active));
       }
-    } catch (error) {
-      console.error("Checkout redirect error:", error);
+      // Save capability BEFORE creating Checkout. Without it, stop before payment.
+      sessionStorage.setItem(`syrena_order_access_${active.orderId}`, active.accessToken);
+      const { url } = await createCheckoutSession({ data: { ...input, orderId: active.orderId, accessToken: active.accessToken } });
+      markUnlockClicked(addShadowOrigin);
+      flushEventsNow();
+      window.location.assign(url);
+    } catch {
+      setCheckoutError("Checkout is unavailable. Your answers remain here. Please try again later; no payment was confirmed.");
+    } finally {
+      checkoutInFlight.current = false;
+      setCheckoutBusy(false);
     }
   };
 
@@ -739,10 +717,12 @@ function QuizPage() {
 
             <button
               onClick={handleUnlock}
+              disabled={checkoutBusy}
               className="glow-button px-10 py-4 rounded-2xl text-white font-medium text-lg tracking-wide transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] cursor-pointer w-full max-w-xs"
             >
-              Unlock Your Full Reading — ${addShadowOrigin ? "31" : "19"}
+              {checkoutBusy ? "Opening checkout…" : `Unlock Your Full Reading — $${addShadowOrigin ? "31" : "19"}`}
             </button>
+            {checkoutError && <p role="alert" className="text-sm text-red-300 mt-4">{checkoutError}</p>}
           </div>
             );
           })()}

@@ -5,7 +5,8 @@ import { generateReading, generateAudio } from "~/utils/reading-generation";
 import { sendReadingEmail } from "~/utils/email";
 import { sendResultsEmail } from "~/server/send-results-email";
 import { retrieveQuizSession } from "~/utils/quiz-session";
-import { trackEvent, completePurchaseTracking } from "~/utils/analytics";
+import { getSessionId, getDeviceType, getTrafficSource, completePurchaseTracking } from "~/utils/analytics";
+import { verifyCheckoutSession } from "~/utils/stripe-checkout";
 
 export const Route = createFileRoute("/thank-you")({
   component: ThankYouPage,
@@ -40,30 +41,92 @@ function ThankYouPage() {
   const [emailMessage, setEmailMessage] = useState("");
   const [autoEmailSent, setAutoEmailSent] = useState(false);
   const [autoEmailAddress, setAutoEmailAddress] = useState("");
+  const [verifyMessage, setVerifyMessage] = useState<string>("");
+  const [verifiedPayment, setVerifiedPayment] = useState<{
+    sessionId: string;
+    amount: number;
+    email?: string;
+  } | null>(null);
   const shareCardRef = useRef<HTMLDivElement>(null);
-  const purchaseTrackedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
 
     async function startPipeline() {
       try {
-        // Gate 2: Require Stripe session_id to be present
-        // Without it, the user didn't complete payment — refuse to generate a reading
+        // ── Gate 1: the payment must be verifiable with Stripe ──────────────
+        // A non-empty ?session_id= is no longer enough. The server retrieves the
+        // session from Stripe and confirms it is paid, was created for this
+        // product, matches the expected amount, and carries our quiz metadata.
+        // Only then is a reading generated — and only then is the `purchase`
+        // analytics event written (server-side, inside verifyCheckoutSession).
         if (!session_id) {
           console.log("No Stripe session_id found — payment not confirmed");
+          setVerifyMessage(
+            "We couldn't find a payment for this link. Complete the quiz and checkout to unlock your reading.",
+          );
           setPhase("error");
           return;
         }
 
-        console.log("Stripe session ID:", session_id);
+        // Clear paywall/unlock state; the returned metrics are client-attested
+        // attribution only (they never influence revenue math).
+        const paywall = completePurchaseTracking();
 
-        // Gate 1: Try to retrieve quiz data. Preferred path is server-side token
-        // retrieval (requires DATABASE_URL). Fallback: read directly from sessionStorage.
-        const token = sessionStorage.getItem("syrena_quiz_token");
+        const verification = await verifyCheckoutSession({
+          data: {
+            sessionId: session_id,
+            context: {
+              analyticsSessionId: getSessionId(),
+              deviceType: getDeviceType(),
+              trafficSource: getTrafficSource(),
+              paywallDurationSec: paywall.durationSec,
+              scrollDepthPct: paywall.scrollPct,
+            },
+          },
+        });
+
+        if (cancelled) return;
+
+        if (!verification.verified) {
+          console.warn("Payment verification failed:", verification.reason);
+          setVerifyMessage(
+            verification.message || "We couldn't verify your payment for this reading.",
+          );
+          setPhase("error");
+          return;
+        }
+
+        setVerifiedPayment({
+          sessionId: verification.sessionId ?? session_id,
+          amount: verification.amount ?? (verification.includeShadow ? 31 : 19),
+          email: verification.email,
+        });
+
+        // ── Gate 2: quiz data ───────────────────────────────────────────────
+        // Preferred source is the Stripe metadata recorded server-side when the
+        // session was created, so delivery no longer depends on this tab's
+        // sessionStorage surviving the Stripe round-trip.
+        // Fallback 1: server-side one-time token (requires DATABASE_URL).
+        // Fallback 2: sessionStorage written by the quiz before checkout.
         let data: QuizData | null = null;
 
-        if (token) {
+        if (verification.primaryArchetype) {
+          data = {
+            name: verification.name || "Starseed",
+            email: verification.email,
+            archetype: verification.primaryArchetype,
+            secondaryArchetype: verification.secondaryArchetype ?? "",
+            sunSign: verification.sunSign ?? "Unknown",
+            includeShadow: verification.includeShadow === true,
+          };
+          setQuizData(data);
+          console.log("Using verified Stripe metadata for quiz context");
+        }
+
+        const token = sessionStorage.getItem("syrena_quiz_token");
+
+        if (!data && token) {
           // Try server-side retrieval using the one-time token
           try {
             const result = await retrieveQuizSession({ data: { token } });
@@ -95,26 +158,14 @@ function ThankYouPage() {
           }
         }
 
-        // If we still don't have data, show error
+        // Payment is verified but we have no quiz context at all — this should
+        // not happen (metadata carries it) unless the session predates this flow.
         if (!data) {
+          setVerifyMessage(
+            "Your payment is verified, but we couldn't match it to your quiz result. Reply to your Stripe receipt and we'll send your reading.",
+          );
           setPhase("error");
           return;
-        }
-
-        // Analytics: payment is confirmed (Stripe session_id gate passed) and we
-        // have the quiz data — fire `purchase` exactly once, carrying the order
-        // bump flag, revenue amount, and (if the user came through the paywall
-        // in this tab) how long they lingered + how far they scrolled.
-        if (!purchaseTrackedRef.current) {
-          purchaseTrackedRef.current = true;
-          const upsellTaken = data.includeShadow === true;
-          const paywall = completePurchaseTracking();
-          trackEvent("purchase", {
-            upsell_taken: upsellTaken,
-            amount: upsellTaken ? 31 : 19,
-            paywall_duration_seconds: paywall.durationSec,
-            scroll_depth_pct: paywall.scrollPct,
-          });
         }
 
         // Phase 1: Show animation briefly
@@ -329,9 +380,8 @@ function ThankYouPage() {
               Payment not confirmed
             </h2>
             <p className="text-base text-gray-300/80 font-light leading-relaxed mb-6">
-              We couldn't verify your payment for this reading. Please complete
-              the quiz and payment to unlock your personalized Starseed Origin
-              Reading.
+              {verifyMessage ||
+                "We couldn't verify your payment for this reading. Please complete the quiz and payment to unlock your personalized Starseed Origin Reading."}
             </p>
             <button
               onClick={() => {
@@ -384,6 +434,12 @@ function ThankYouPage() {
           {quizData?.sunSign && (
             <p className="text-xs text-gray-500/50 mt-0.5">
               Sun in {quizData.sunSign}
+            </p>
+          )}
+          {verifiedPayment && (
+            <p className="text-[11px] text-gray-500/50 mt-3 tracking-wide">
+              ✓ Payment verified with Stripe · ${verifiedPayment.amount.toFixed(2)}
+              {verifiedPayment.email ? ` · receipt to ${verifiedPayment.email}` : ""}
             </p>
           )}
         </div>

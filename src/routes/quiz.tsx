@@ -47,6 +47,80 @@ interface FormState {
   soulAge: number | null;
 }
 
+const TRAIT_FIELDS = [
+  "belonging",
+  "intensity",
+  "nightSky",
+  "dreams",
+  "recharge",
+  "empathy",
+  "soulAge",
+] as const;
+
+function toNumberOrNull(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+/**
+ * Rebuild the paywall state from the quiz payload stashed in sessionStorage
+ * before the Stripe redirect. Returns null when the stored payload is not a
+ * complete quiz result (then the quiz simply starts from the top).
+ */
+function restoreQuizState(
+  stored: string,
+): { form: FormState; result: ReturnType<typeof scoreQuiz>; includeShadow: boolean } | null {
+  let parsed: {
+    name?: unknown;
+    email?: unknown;
+    includeShadow?: unknown;
+    answers?: Record<string, unknown>;
+  };
+  try {
+    parsed = JSON.parse(stored) as typeof parsed;
+  } catch {
+    return null;
+  }
+
+  const answers = parsed.answers ?? {};
+  const form: FormState = {
+    name: typeof parsed.name === "string" ? parsed.name : "",
+    email: typeof parsed.email === "string" ? parsed.email : "",
+    birthMonth: answers.birthMonth != null ? String(answers.birthMonth) : "",
+    birthDay: answers.birthDay != null ? String(answers.birthDay) : "",
+    birthYear: answers.birthYear != null ? String(answers.birthYear) : "",
+    belonging: toNumberOrNull(answers.belonging),
+    intensity: toNumberOrNull(answers.intensity),
+    nightSky: toNumberOrNull(answers.nightSky),
+    dreams: toNumberOrNull(answers.dreams),
+    recharge: toNumberOrNull(answers.recharge),
+    empathy: toNumberOrNull(answers.empathy),
+    soulAge: toNumberOrNull(answers.soulAge),
+  };
+
+  // Every trait answer is needed to re-score; otherwise we cannot rebuild the reveal.
+  if (TRAIT_FIELDS.some((field) => form[field] === null)) return null;
+
+  const result = scoreQuiz({
+    name: form.name,
+    birthMonth: parseInt(form.birthMonth) || 1,
+    birthDay: parseInt(form.birthDay) || 1,
+    belonging: form.belonging!,
+    intensity: form.intensity!,
+    nightSky: form.nightSky!,
+    dreams: form.dreams!,
+    recharge: form.recharge!,
+    empathy: form.empathy!,
+    soulAge: form.soulAge!,
+  });
+
+  return { form, result, includeShadow: parsed.includeShadow === true };
+}
+
 function QuizPage() {
   const navigate = useNavigate();
 
@@ -69,6 +143,8 @@ function QuizPage() {
   const [result, setResult] = useState<ReturnType<typeof scoreQuiz> | null>(null);
   const [addShadowOrigin, setAddShadowOrigin] = useState(false);
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
+  const [checkoutPending, setCheckoutPending] = useState(false);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
   // Analytics refs — ensure each event fires exactly once per session/page view
@@ -96,6 +172,28 @@ function QuizPage() {
   // but never completed Stripe and came back). Also fire paywall_abandon on
   // page exit when the paywall was viewed but unlock was never clicked.
   useEffect(() => {
+    // Returning from an abandoned Stripe checkout (?checkout=cancelled): restore
+    // the paywall from the quiz data we stashed before the redirect, so the
+    // buyer lands back on their own reading instead of the first question.
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("checkout") === "cancelled") {
+        const stored = sessionStorage.getItem("syrena_quiz_data");
+        if (stored) {
+          const restored = restoreQuizState(stored);
+          if (restored) {
+            setForm(restored.form);
+            setResult(restored.result);
+            setAddShadowOrigin(restored.includeShadow);
+            setStep("reveal");
+            window.history.replaceState({}, "", window.location.pathname);
+          }
+        }
+      }
+    } catch (error) {
+      console.warn("Could not restore quiz state after cancelled checkout:", error);
+    }
+
     detectPaymentAbandon();
     const onPageExit = () => {
       trackPaywallExit();
@@ -218,10 +316,10 @@ function QuizPage() {
   };
 
   const handleUnlock = async () => {
-    if (!result) return;
+    if (!result || checkoutPending) return;
 
-    // Analytics: user clicked unlock → checkout_started (paywall → Stripe hop).
-    markUnlockClicked(addShadowOrigin);
+    setCheckoutError(null);
+    setCheckoutPending(true);
 
     // Build quiz data payload
     const quizData = {
@@ -249,12 +347,14 @@ function QuizPage() {
     // (survives same-tab redirects, cleared when tab closes)
     sessionStorage.setItem("syrena_quiz_data", JSON.stringify(quizData));
 
+    let quizToken: string | undefined;
     try {
       // Save quiz data server-side and get a one-time token (requires DATABASE_URL)
       const { token } = await saveQuizSession({ data: quizData });
 
       // Store the token for server-side retrieval on thank-you page
       sessionStorage.setItem("syrena_quiz_token", token);
+      quizToken = token;
     } catch (error) {
       // Database not available — quiz data is already in sessionStorage as fallback.
       // This is expected when DATABASE_URL is not configured. The thank-you page
@@ -263,13 +363,40 @@ function QuizPage() {
     }
 
     try {
-      // Redirect to Stripe checkout
-      const { url } = await createCheckoutSession({ data: { includeShadow: addShadowOrigin } });
-      if (url) {
-        window.location.href = url;
+      // Ask the server to create a Stripe Checkout Session for this exact order.
+      // Pricing, product and redirect URLs are decided server-side; the quiz
+      // context travels in Stripe metadata so the reading survives the redirect.
+      const checkout = await createCheckoutSession({
+        data: {
+          includeShadow: addShadowOrigin,
+          customerEmail: form.email?.trim() || undefined,
+          quiz: {
+            name: form.name,
+            primaryArchetype: result.primaryArchetype,
+            secondaryArchetype: result.secondaryArchetype,
+            sunSign: result.sunSign,
+            token: quizToken,
+          },
+          origin: window.location.origin,
+        },
+      });
+
+      if (!checkout.ok || !checkout.url) {
+        // Checkout could not be started — stay on the paywall and say so.
+        // (No payment was taken; the unlock flag is deliberately not set.)
+        setCheckoutError(checkout.message || "We couldn't open secure checkout. Please try again.");
+        setCheckoutPending(false);
+        return;
       }
+
+      // Analytics: we are actually leaving for Stripe → checkout_started.
+      markUnlockClicked(addShadowOrigin);
+
+      window.location.href = checkout.url;
     } catch (error) {
       console.error("Checkout redirect error:", error);
+      setCheckoutError("We couldn't open secure checkout. Please try again in a moment.");
+      setCheckoutPending(false);
     }
   };
 
@@ -739,10 +866,19 @@ function QuizPage() {
 
             <button
               onClick={handleUnlock}
-              className="glow-button px-10 py-4 rounded-2xl text-white font-medium text-lg tracking-wide transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] cursor-pointer w-full max-w-xs"
+              disabled={checkoutPending}
+              className="glow-button px-10 py-4 rounded-2xl text-white font-medium text-lg tracking-wide transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] cursor-pointer w-full max-w-xs disabled:opacity-60 disabled:cursor-wait disabled:hover:scale-100"
             >
-              Unlock Your Full Reading — ${addShadowOrigin ? "31" : "19"}
+              {checkoutPending
+                ? "Opening secure checkout…"
+                : `Unlock Your Full Reading — ${addShadowOrigin ? "31" : "19"}`}
             </button>
+
+            {checkoutError && (
+              <p className="text-xs text-red-300/80 max-w-xs leading-relaxed" role="alert">
+                {checkoutError}
+              </p>
+            )}
           </div>
             );
           })()}

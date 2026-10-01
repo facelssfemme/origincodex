@@ -162,8 +162,16 @@ function Dashboard() {
             {/* Summary cards */}
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               <StatCard label="Sessions" value={String(report.uniqueSessions)} sub="anonymous session ids" />
-              <StatCard label="Purchases" value={String(report.purchase.count)} sub={`${report.paywall.checkoutStartedSessions} started checkout`} />
-              <StatCard label="Revenue" value={`$${report.purchase.revenue.toFixed(2)}`} sub={`AOV $${report.purchase.avgOrderValue.toFixed(2)}`} />
+              <StatCard
+                label="Verified purchases"
+                value={String(report.purchase.count)}
+                sub={`${report.paywall.checkoutStartedSessions} started checkout`}
+              />
+              <StatCard
+                label="Verified revenue"
+                value={`${report.purchase.revenue.toFixed(2)}`}
+                sub={`AOV ${report.purchase.avgOrderValue.toFixed(2)}`}
+              />
               <StatCard label="Upsell rate" value={`${report.purchase.upsellRate}%`} sub={`${report.purchase.upsellCount} with Shadow Origin`} />
               <StatCard label="Paywall abandon" value={String(report.paywall.abandonedSessions)} sub={`${report.paywall.paymentAbandonedSessions} payment abandons`} />
               <StatCard
@@ -172,6 +180,13 @@ function Dashboard() {
                 sub="before abandonment"
               />
             </div>
+
+            <p className="text-[11px] text-gray-500/60 leading-relaxed">
+              <span className="text-gold/80">Verified revenue</span> counts only payments confirmed
+              server-side against Stripe (paid Checkout Session, correct product, amount and quiz
+              metadata). {report.purchase.legacyUnverifiedCount} legacy client-side purchase
+              {report.purchase.legacyUnverifiedCount === 1 ? " event" : " events"} (${report.purchase.legacyUnverifiedRevenue.toFixed(2)}) excluded.
+            </p>
 
             {/* Funnel */}
             <section className="cosmic-card rounded-2xl p-5 flex flex-col gap-3">
@@ -250,7 +265,7 @@ function Dashboard() {
               </div>
               <p className="text-[11px] text-gray-600/60 mt-1">
                 Durations come from a 15s heartbeat + exit/purchase events, per-session max.
-                Payment abandons = clicked unlock but never confirmed a purchase.
+                Payment abandons = clicked unlock but never reached a Stripe-verified purchase.
               </p>
             </section>
 

@@ -40,11 +40,19 @@ export interface PaywallStats {
 }
 
 export interface PurchaseStats {
+  /**
+   * Purchases verified server-side against Stripe (a paid Checkout Session
+   * belonging to this product). Client-fired `purchase` events are NOT counted.
+   */
   count: number;
   upsellCount: number;
   upsellRate: number;
+  /** Verified revenue only, in dollars. */
   revenue: number;
   avgOrderValue: number;
+  /** Legacy client-fired purchase events (pre-verification flow) — excluded from revenue. */
+  legacyUnverifiedCount: number;
+  legacyUnverifiedRevenue: number;
 }
 
 export interface AnalyticsReport {
@@ -87,6 +95,16 @@ function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
+/**
+ * A `purchase` only counts once the server has confirmed it with Stripe
+ * (props.verified === true, written by recordVerifiedPurchase). Anything fired
+ * from the browser — including the legacy thank-you page events — is treated as
+ * an unverified artifact and kept out of the revenue figure.
+ */
+function isVerifiedPurchase(event: TrackedEvent): boolean {
+  return event.name === "purchase" && event.props?.verified === true;
+}
+
 export const getAnalytics = createServerFn({ method: "POST" })
   .validator((d: AnalyticsRange) => d ?? {})
   .handler(async ({ data }): Promise<AnalyticsReport> => {
@@ -120,7 +138,15 @@ export const getAnalytics = createServerFn({ method: "POST" })
         avgDurationSecAllViewers: 0,
         avgScrollPct: 0,
       },
-      purchase: { count: 0, upsellCount: 0, upsellRate: 0, revenue: 0, avgOrderValue: 0 },
+      purchase: {
+        count: 0,
+        upsellCount: 0,
+        upsellRate: 0,
+        revenue: 0,
+        avgOrderValue: 0,
+        legacyUnverifiedCount: 0,
+        legacyUnverifiedRevenue: 0,
+      },
       trafficSources: [],
       deviceSplit: [],
     });
@@ -231,20 +257,41 @@ export const getAnalytics = createServerFn({ method: "POST" })
         durationsBeforeAbandon.push(maxDur);
       }
       if (has(session, "checkout_started")) checkoutStartedSessions++;
-      if (has(session, "purchase")) purchaseSessions++;
+      if (session.some(isVerifiedPurchase)) purchaseSessions++;
     }
 
-    // ── Purchase / revenue ──────────────────────────────────────────────────
+    // ── Purchase / revenue (verified server-side against Stripe only) ───────
+    // Verified events carry the Stripe Checkout Session id; a buyer reloading
+    // /thank-you (or replaying the verification call) writes the same id again,
+    // so revenue counts each Stripe session exactly once.
     let purchaseCount = 0;
     let upsellCount = 0;
     let revenue = 0;
+    let legacyUnverifiedCount = 0;
+    let legacyUnverifiedRevenue = 0;
+    const countedStripeSessions = new Set<string>();
     for (const session of bySession.values()) {
-      if (!has(session, "purchase")) continue;
-      purchaseCount++;
-      const upsellTaken = propOf(session, ["purchase"], "upsell_taken") === true;
-      if (upsellTaken) upsellCount++;
-      const amount = num(propOf(session, ["purchase"], "amount"));
-      revenue += amount ?? (upsellTaken ? 31 : 19);
+      for (const event of session) {
+        if (event.name !== "purchase") continue;
+        const upsellTaken = event.props?.upsell_taken === true;
+        const amount = num(event.props?.amount);
+        if (isVerifiedPurchase(event)) {
+          const stripeSessionId =
+            typeof event.props?.stripe_session_id === "string"
+              ? event.props.stripe_session_id
+              : `${session[0]?.session_id ?? "unknown"}:${event.timestamp}`;
+          if (countedStripeSessions.has(stripeSessionId)) continue;
+          countedStripeSessions.add(stripeSessionId);
+          purchaseCount++;
+          if (upsellTaken) upsellCount++;
+          revenue += amount ?? (upsellTaken ? 31 : 19);
+        } else {
+          // Client-fired purchase (legacy flow / forged session_id) — recorded
+          // for visibility but never counted as revenue.
+          legacyUnverifiedCount++;
+          legacyUnverifiedRevenue += amount ?? (upsellTaken ? 31 : 19);
+        }
+      }
     }
 
     const avg = (arr: number[]) =>
@@ -283,6 +330,8 @@ export const getAnalytics = createServerFn({ method: "POST" })
         upsellRate: purchaseCount > 0 ? Math.round((upsellCount / purchaseCount) * 1000) / 10 : 0,
         revenue: Math.round(revenue * 100) / 100,
         avgOrderValue: purchaseCount > 0 ? Math.round((revenue / purchaseCount) * 100) / 100 : 0,
+        legacyUnverifiedCount,
+        legacyUnverifiedRevenue: Math.round(legacyUnverifiedRevenue * 100) / 100,
       },
       trafficSources: [...sourceCounts.entries()]
         .map(([source, sessions]) => ({ source, sessions }))

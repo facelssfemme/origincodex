@@ -1,8 +1,8 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useState, useCallback, useEffect, useRef } from "react";
-import { scoreQuiz, archetypeStars, archetypeDescriptions, type QuizAnswers, type Archetype } from "~/utils/scoring";
+import { scoreQuiz, archetypeStars, archetypeDescriptions, type QuizAnswers } from "~/utils/scoring";
 import { createCheckoutSession } from "~/utils/stripe-checkout";
-import { saveQuizSession } from "~/utils/quiz-session";
+import { readQuizDraft, writeQuizDraft, type Step, type FormState } from "~/utils/quiz-draft";
 import {
   trackEvent,
   startPaywallTracking,
@@ -18,111 +18,7 @@ export const Route = createFileRoute("/quiz")({
   component: QuizPage,
 });
 
-type Step =
-  | "name"
-  | "birthdate"
-  | "belonging"
-  | "intensity"
-  | "nightSky"
-  | "dreams"
-  | "recharge"
-  | "empathy"
-  | "soulAge"
-  | "email"
-  | "reading"
-  | "reveal";
-
-interface FormState {
-  name: string;
-  birthMonth: string;
-  birthDay: string;
-  birthYear: string;
-  email: string;
-  belonging: number | null;
-  intensity: number | null;
-  nightSky: number | null;
-  dreams: number | null;
-  recharge: number | null;
-  empathy: number | null;
-  soulAge: number | null;
-}
-
-const TRAIT_FIELDS = [
-  "belonging",
-  "intensity",
-  "nightSky",
-  "dreams",
-  "recharge",
-  "empathy",
-  "soulAge",
-] as const;
-
-function toNumberOrNull(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim() !== "") {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return null;
-}
-
-/**
- * Rebuild the paywall state from the quiz payload stashed in sessionStorage
- * before the Stripe redirect. Returns null when the stored payload is not a
- * complete quiz result (then the quiz simply starts from the top).
- */
-function restoreQuizState(
-  stored: string,
-): { form: FormState; result: ReturnType<typeof scoreQuiz>; includeShadow: boolean } | null {
-  let parsed: {
-    name?: unknown;
-    email?: unknown;
-    includeShadow?: unknown;
-    answers?: Record<string, unknown>;
-  };
-  try {
-    parsed = JSON.parse(stored) as typeof parsed;
-  } catch {
-    return null;
-  }
-
-  const answers = parsed.answers ?? {};
-  const form: FormState = {
-    name: typeof parsed.name === "string" ? parsed.name : "",
-    email: typeof parsed.email === "string" ? parsed.email : "",
-    birthMonth: answers.birthMonth != null ? String(answers.birthMonth) : "",
-    birthDay: answers.birthDay != null ? String(answers.birthDay) : "",
-    birthYear: answers.birthYear != null ? String(answers.birthYear) : "",
-    belonging: toNumberOrNull(answers.belonging),
-    intensity: toNumberOrNull(answers.intensity),
-    nightSky: toNumberOrNull(answers.nightSky),
-    dreams: toNumberOrNull(answers.dreams),
-    recharge: toNumberOrNull(answers.recharge),
-    empathy: toNumberOrNull(answers.empathy),
-    soulAge: toNumberOrNull(answers.soulAge),
-  };
-
-  // Every trait answer is needed to re-score; otherwise we cannot rebuild the reveal.
-  if (TRAIT_FIELDS.some((field) => form[field] === null)) return null;
-
-  const result = scoreQuiz({
-    name: form.name,
-    birthMonth: parseInt(form.birthMonth) || 1,
-    birthDay: parseInt(form.birthDay) || 1,
-    belonging: form.belonging!,
-    intensity: form.intensity!,
-    nightSky: form.nightSky!,
-    dreams: form.dreams!,
-    recharge: form.recharge!,
-    empathy: form.empathy!,
-    soulAge: form.soulAge!,
-  });
-
-  return { form, result, includeShadow: parsed.includeShadow === true };
-}
-
 function QuizPage() {
-  const navigate = useNavigate();
 
   const [step, setStep] = useState<Step>("name");
   const [form, setForm] = useState<FormState>({
@@ -139,13 +35,41 @@ function QuizPage() {
     empathy: null,
     soulAge: null,
   });
+  const checkoutInFlight = useRef(false);
+  const [checkoutBusy, setCheckoutBusy] = useState(false);
+  const [checkoutError, setCheckoutError] = useState("");
+  const [draftLoaded, setDraftLoaded] = useState(false);
   const [animating, setAnimating] = useState(false);
   const [result, setResult] = useState<ReturnType<typeof scoreQuiz> | null>(null);
   const [addShadowOrigin, setAddShadowOrigin] = useState(false);
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
-  const [checkoutPending, setCheckoutPending] = useState(false);
-  const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+
+  // Restore after hydration so server and initial browser markup agree.
+  useEffect(() => {
+    try {
+      const draft = readQuizDraft(window.sessionStorage);
+      if (draft) {
+        setForm(draft.form);
+        setStep(draft.step);
+        setAddShadowOrigin(draft.addShadowOrigin);
+        if (draft.step === "reveal") {
+          setResult(scoreQuiz({
+            ...draft.form,
+            birthMonth: Number(draft.form.birthMonth),
+            birthDay: Number(draft.form.birthDay),
+          } as QuizAnswers));
+        }
+      }
+    } catch { /* Storage can be disabled; keep the quiz usable. */ }
+    setDraftLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (!draftLoaded) return;
+    try { writeQuizDraft(window.sessionStorage, { step, form, addShadowOrigin }); }
+    catch { /* Storage access itself can throw in restricted browsers. */ }
+  }, [draftLoaded, step, form, addShadowOrigin]);
 
   // Analytics refs — ensure each event fires exactly once per session/page view
   const quizStartedRef = useRef(false);
@@ -158,7 +82,6 @@ function QuizPage() {
   ];
   const stepIndex = PROGRESS_STEPS.indexOf(step);
   const totalProgressSteps = PROGRESS_STEPS.length;
-  const progressPct = stepIndex >= 0 ? Math.round((stepIndex / (totalProgressSteps - 1)) * 100) : 0;
 
   const transitionTo = useCallback((nextStep: Step) => {
     setAnimating(true);
@@ -172,28 +95,6 @@ function QuizPage() {
   // but never completed Stripe and came back). Also fire paywall_abandon on
   // page exit when the paywall was viewed but unlock was never clicked.
   useEffect(() => {
-    // Returning from an abandoned Stripe checkout (?checkout=cancelled): restore
-    // the paywall from the quiz data we stashed before the redirect, so the
-    // buyer lands back on their own reading instead of the first question.
-    try {
-      const params = new URLSearchParams(window.location.search);
-      if (params.get("checkout") === "cancelled") {
-        const stored = sessionStorage.getItem("syrena_quiz_data");
-        if (stored) {
-          const restored = restoreQuizState(stored);
-          if (restored) {
-            setForm(restored.form);
-            setResult(restored.result);
-            setAddShadowOrigin(restored.includeShadow);
-            setStep("reveal");
-            window.history.replaceState({}, "", window.location.pathname);
-          }
-        }
-      }
-    } catch (error) {
-      console.warn("Could not restore quiz state after cancelled checkout:", error);
-    }
-
     detectPaymentAbandon();
     const onPageExit = () => {
       trackPaywallExit();
@@ -237,8 +138,6 @@ function QuizPage() {
       });
     }
   }, [step]);
-
-  const handleStart = () => transitionTo("name");
 
   const handleNameSubmit = () => {
     if (form.name.trim()) transitionTo("belonging");
@@ -316,87 +215,39 @@ function QuizPage() {
   };
 
   const handleUnlock = async () => {
-    if (!result || checkoutPending) return;
-
-    setCheckoutError(null);
-    setCheckoutPending(true);
-
-    // Build quiz data payload
-    const quizData = {
-      name: form.name,
-      email: form.email,
-      archetype: result.primaryArchetype,
-      secondaryArchetype: result.secondaryArchetype,
-      sunSign: result.sunSign,
-      includeShadow: addShadowOrigin,
-      answers: {
-        birthMonth: form.birthMonth,
-        birthDay: form.birthDay,
-        birthYear: form.birthYear,
-        belonging: form.belonging,
-        intensity: form.intensity,
-        nightSky: form.nightSky,
-        dreams: form.dreams,
-        recharge: form.recharge,
-        empathy: form.empathy,
-        soulAge: form.soulAge,
-      },
-    };
-
-    // Always store quiz data in sessionStorage as fallback
-    // (survives same-tab redirects, cleared when tab closes)
-    sessionStorage.setItem("syrena_quiz_data", JSON.stringify(quizData));
-
-    let quizToken: string | undefined;
+    if (!result || checkoutInFlight.current) return;
+    checkoutInFlight.current = true;
+    setCheckoutBusy(true);
+    setCheckoutError("");
     try {
-      // Save quiz data server-side and get a one-time token (requires DATABASE_URL)
-      const { token } = await saveQuizSession({ data: quizData });
-
-      // Store the token for server-side retrieval on thank-you page
-      sessionStorage.setItem("syrena_quiz_token", token);
-      quizToken = token;
-    } catch (error) {
-      // Database not available — quiz data is already in sessionStorage as fallback.
-      // This is expected when DATABASE_URL is not configured. The thank-you page
-      // will use sessionStorage data directly when no token is present.
-      console.warn("saveQuizSession failed (DB may not be connected), using sessionStorage fallback:", (error as Error).message);
-    }
-
-    try {
-      // Ask the server to create a Stripe Checkout Session for this exact order.
-      // Pricing, product and redirect URLs are decided server-side; the quiz
-      // context travels in Stripe metadata so the reading survives the redirect.
-      const checkout = await createCheckoutSession({
-        data: {
-          includeShadow: addShadowOrigin,
-          customerEmail: form.email?.trim() || undefined,
-          quiz: {
-            name: form.name,
-            primaryArchetype: result.primaryArchetype,
-            secondaryArchetype: result.secondaryArchetype,
-            sunSign: result.sunSign,
-            token: quizToken,
-          },
-          origin: window.location.origin,
+      writeQuizDraft(window.sessionStorage, { step: "reveal", form, addShadowOrigin });
+      const input = {
+        answers: {
+          name: form.name, birthMonth: Number(form.birthMonth), birthDay: Number(form.birthDay),
+          belonging: form.belonging, intensity: form.intensity, nightSky: form.nightSky,
+          dreams: form.dreams, recharge: form.recharge, empathy: form.empathy, soulAge: form.soulAge,
         },
-      });
-
-      if (!checkout.ok || !checkout.url) {
-        // Checkout could not be started — stay on the paywall and say so.
-        // (No payment was taken; the unlock flag is deliberately not set.)
-        setCheckoutError(checkout.message || "We couldn't open secure checkout. Please try again.");
-        setCheckoutPending(false);
-        return;
+        includeShadow: addShadowOrigin,
+      };
+      const inputKey = JSON.stringify(input);
+      let active;
+      try { active = JSON.parse(sessionStorage.getItem("syrena_checkout_attempt") || "null"); } catch { active = null; }
+      if (!active || active.inputKey !== inputKey) {
+        const accessToken = Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, "0")).join("");
+        active = { orderId: crypto.randomUUID(), accessToken, inputKey };
+        sessionStorage.setItem("syrena_checkout_attempt", JSON.stringify(active));
       }
-
-      // Analytics: we are actually leaving for Stripe → checkout_started.
+      // Save capability BEFORE creating Checkout. Without it, stop before payment.
+      sessionStorage.setItem(`syrena_order_access_${active.orderId}`, active.accessToken);
+      const { url } = await createCheckoutSession({ data: { ...input, orderId: active.orderId, accessToken: active.accessToken } });
       markUnlockClicked(addShadowOrigin);
-
-      window.location.href = checkout.url;
-    } catch (error) {
-      console.error("Checkout redirect error:", error);
-      setCheckoutError("We couldn't open secure checkout. Please try again in a moment.");
-      setCheckoutPending(false);
+      flushEventsNow();
+      window.location.assign(url);
+    } catch {
+      setCheckoutError("Checkout is unavailable. Your answers remain here. Please try again later; no payment was confirmed.");
+    } finally {
+      checkoutInFlight.current = false;
+      setCheckoutBusy(false);
     }
   };
 
@@ -866,19 +717,12 @@ function QuizPage() {
 
             <button
               onClick={handleUnlock}
-              disabled={checkoutPending}
-              className="glow-button px-10 py-4 rounded-2xl text-white font-medium text-lg tracking-wide transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] cursor-pointer w-full max-w-xs disabled:opacity-60 disabled:cursor-wait disabled:hover:scale-100"
+              disabled={checkoutBusy}
+              className="glow-button px-10 py-4 rounded-2xl text-white font-medium text-lg tracking-wide transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] cursor-pointer w-full max-w-xs"
             >
-              {checkoutPending
-                ? "Opening secure checkout…"
-                : `Unlock Your Full Reading — ${addShadowOrigin ? "31" : "19"}`}
+              {checkoutBusy ? "Opening checkout…" : `Unlock Your Full Reading — $${addShadowOrigin ? "31" : "19"}`}
             </button>
-
-            {checkoutError && (
-              <p className="text-xs text-red-300/80 max-w-xs leading-relaxed" role="alert">
-                {checkoutError}
-              </p>
-            )}
+            {checkoutError && <p role="alert" className="text-sm text-red-300 mt-4">{checkoutError}</p>}
           </div>
             );
           })()}

@@ -131,7 +131,7 @@ function flush(): void {
   if (!queue.length) return;
   const batch = queue.splice(0, MAX_BATCH);
   // Fire-and-forget; a dropped batch is acceptable (analytics is best-effort).
-  trackEvents({ data: { events: batch } }).then((r) => {
+  trackEvents({ data: { events: batch } }).then(() => {
     // no-op (fire-and-forget)
   }).catch((e) => {
     console.warn("[analytics] event batch delivery failed", batch.map((x) => x.name), String(e));

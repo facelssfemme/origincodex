@@ -69,7 +69,8 @@ export const trackEvents = createServerFn({ method: "POST" })
         : (data as { data?: { events?: unknown[] } } | undefined)?.data?.events) ?? [];
     const events = (raw as TrackedEvent[]).slice(0, MAX_EVENTS_PER_BATCH).filter(
       (e): e is TrackedEvent =>
-        !!e && typeof e.name === "string" && e.name.length > 0 && e.name.length <= 64,
+        !!e && typeof e.name === "string" && e.name.length > 0 && e.name.length <= 64
+        && e.name !== "purchase" && e.props?.verified !== true,
     );
 
     if (!events.length) {
@@ -83,85 +84,6 @@ export const trackEvents = createServerFn({ method: "POST" })
       // Never let a tracking failure break the user's page — log and return.
       console.error("[analytics] failed to write events:", err);
       return { ok: false, written: 0, error: (err as Error).message };
-    }
-  });
-
-// ─── Server-verified purchase events ─────────────────────────────────────────
-//
-// A `purchase` event is only ever written from the server, after Stripe has
-// confirmed the payment (see verifyCheckoutSession in ~/utils/stripe-checkout).
-// The client can no longer mint a purchase, so the dashboard's revenue figure
-// is trustworthy: `props.verified === true` means "Stripe says this was paid".
-//
-// This lives behind a server function (like every other writer of the log) so
-// that the node-only imports above never reach the browser bundle.
-
-export interface VerifiedPurchaseContext {
-  /** Anonymous analytics session id from the buyer's tab (attribution only). */
-  analyticsSessionId?: string;
-  deviceType?: string;
-  trafficSource?: string;
-  /** Client-attested paywall metrics — never used for revenue math. */
-  paywallDurationSec?: number;
-  scrollDepthPct?: number | null;
-}
-
-export interface VerifiedPurchaseInput {
-  /** Stripe Checkout Session id (`cs_…`) — the idempotency key for this event. */
-  stripeSessionId: string;
-  /** Amount actually charged, in cents (from the Stripe session). */
-  amountCents: number;
-  currency: string;
-  /** Whether the Shadow Origin order bump was part of the paid order. */
-  includeShadow: boolean;
-  paymentIntentId?: string;
-  /** Buyer email captured by Stripe, if any. */
-  email?: string;
-  context?: VerifiedPurchaseContext;
-}
-
-/**
- * Append a server-verified `purchase` event. Returns false if the write failed —
- * the caller must not treat that as a payment failure.
- *
- * Duplicate Stripe sessions (e.g. reloading /thank-you) are collapsed at
- * aggregation time in src/server/analytics.ts, which counts unique
- * `stripe_session_id` values.
- */
-export const recordVerifiedPurchase = createServerFn({ method: "POST" })
-  .validator((d: VerifiedPurchaseInput) => d)
-  .handler(async ({ data }): Promise<boolean> => {
-    try {
-      const ctx = data.context ?? {};
-      const event: TrackedEvent = {
-        name: "purchase",
-        timestamp: new Date().toISOString(),
-        // Prefer the buyer's tab session id so the purchase joins the rest of
-        // that session's funnel; fall back to a deterministic id.
-        session_id: ctx.analyticsSessionId?.trim() || `stripe:${data.stripeSessionId}`,
-        device_type: ctx.deviceType || "unknown",
-        traffic_source: ctx.trafficSource || "unknown",
-        page: "/thank-you",
-        props: {
-          upsell_taken: data.includeShadow,
-          amount: Math.round(data.amountCents) / 100,
-          currency: data.currency,
-          verified: true,
-          verification: "stripe_checkout_session",
-          stripe_session_id: data.stripeSessionId,
-          payment_intent_id: data.paymentIntentId ?? null,
-          has_customer_email: Boolean(data.email),
-          paywall_duration_seconds:
-            typeof ctx.paywallDurationSec === "number" ? ctx.paywallDurationSec : null,
-          scroll_depth_pct: typeof ctx.scrollDepthPct === "number" ? ctx.scrollDepthPct : null,
-        },
-      };
-
-      await appendEvents([event]);
-      return true;
-    } catch (err) {
-      console.error("[analytics] failed to record verified purchase:", err);
-      return false;
     }
   });
 

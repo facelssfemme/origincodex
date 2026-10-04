@@ -111,7 +111,7 @@ function providers() {
   return {
     calls,
     preflight() {
-      return { modelId: "mock-model", voiceId: "mock-voice" };
+      return { providerId: "fixture", modelId: "mock-model", voiceId: "mock-voice" };
     },
     async text(o) {
       calls.text++;
@@ -615,10 +615,11 @@ test("generation provider identity is pinned and changed configuration cannot re
   await fulfill(repo, p, o.id, "https://example.invalid", secret);
   const before = await repo.get(o.id);
   assert.deepEqual(before.providerIdentity, {
+    providerId: "fixture",
     modelId: "mock-model",
     voiceId: "mock-voice",
   });
-  p.preflight = () => ({ modelId: "changed", voiceId: "mock-voice" });
+  p.preflight = () => ({ providerId: "changed", modelId: "mock-model", voiceId: "mock-voice" });
   const previous = p.calls.text;
   await fulfill(repo, p, o.id, "https://example.invalid", secret);
   assert.equal(p.calls.text, previous);

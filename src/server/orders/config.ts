@@ -1,3 +1,4 @@
+import { resolveReadingProvider, type ReadingAdapters } from "./text-provider.ts";
 export function required(name: string) {
   const value = process.env[name];
   if (!value) throw Error(`Missing configuration: ${name}`);
@@ -44,7 +45,7 @@ export function paymentConfig() {
 
 // Check only when opening live checkout; payment webhooks must keep reconciling
 // existing purchases if generation is subsequently paused.
-export function assertLiveCheckoutReady() {
+export function assertLiveCheckoutReady(adapters?: ReadingAdapters) {
   if (process.env.SYRENA_LIVE_CHECKOUT_ENABLED !== "approved-live")
     throw Error("Live checkout disabled");
   if (
@@ -52,10 +53,9 @@ export function assertLiveCheckoutReady() {
     process.env.SYRENA_FULFILLMENT_READY !== "approved-live"
   )
     throw Error("Live delivery not enabled");
+  resolveReadingProvider(process.env, adapters);
   for (const name of [
     "STRIPE_WEBHOOK_SECRET",
-    "ANTHROPIC_API_KEY",
-    "SYRENA_READING_MODEL",
     "ELEVENLABS_API_KEY",
     "RESEND_API_KEY",
     "RESEND_EMAIL_FROM",

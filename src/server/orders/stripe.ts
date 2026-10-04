@@ -1,10 +1,12 @@
 import Stripe from "stripe";
+import type { ReadingAdapters } from "./text-provider.ts";
 import { createHash } from "node:crypto";
 import { paymentConfig, required, assertLiveCheckoutReady } from "./config.ts";
 import type { Order, Session } from "./domain.ts";
 export function stripeGateway(
   config = paymentConfig(),
   stripe = new Stripe(config.key, { maxNetworkRetries: 2, timeout: 15000 }),
+  adapters?: ReadingAdapters,
 ) {
   async function verifyAccount() {
     const account = await stripe.accounts.retrieveCurrent();
@@ -14,7 +16,7 @@ export function stripeGateway(
     config,
     environment: config.environment,
     async create(order: Order) {
-      if (config.environment === "live") assertLiveCheckoutReady();
+      if (config.environment === "live") assertLiveCheckoutReady(adapters);
       await verifyAccount();
       if (
         order.environment !== config.environment ||

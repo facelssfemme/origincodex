@@ -19,7 +19,7 @@ export interface Store {
   release(id: string, lease: string): Promise<void>;
 }
 export interface Providers {
-  preflight(order: Order): { modelId: string; voiceId: string };
+  preflight(order: Order): { providerId: string; modelId: string; voiceId: string };
   text(order: Order): Promise<Reading>;
   audio(order: Order): Promise<string>;
   email(payload: EmailPayload, key: string): Promise<string>;
@@ -56,7 +56,8 @@ export async function fulfill(
     const identity = providers.preflight(order);
     if (
       order.providerIdentity &&
-      (order.providerIdentity.modelId !== identity.modelId ||
+      (order.providerIdentity.providerId !== identity.providerId ||
+        order.providerIdentity.modelId !== identity.modelId ||
         order.providerIdentity.voiceId !== identity.voiceId)
     )
       throw Error("Provider identity changed");

@@ -1,6 +1,5 @@
-import { Anthropic } from "@anthropic-ai/sdk";
 import { Resend } from "resend";
-import { promptFor, validateReading } from "./domain.ts";
+import { generateProviderReading, resolveReadingProvider } from "./text-provider.ts";
 import type { Providers } from "./service.ts";
 import { required, paymentConfig } from "./config.ts";
 export const providers: Providers = {
@@ -20,9 +19,8 @@ export const providers: Providers = {
       order.paymentEmail !== required("SYRENA_TEST_INBOX")
     )
       throw Error("Test recipient is not allowlisted");
+    const reading = resolveReadingProvider();
     for (const n of [
-      "ANTHROPIC_API_KEY",
-      "SYRENA_READING_MODEL",
       "ELEVENLABS_API_KEY",
       "ELEVENLABS_VOICE_ID",
       "RESEND_API_KEY",
@@ -32,28 +30,13 @@ export const providers: Providers = {
     if (process.env.SYRENA_VOICE_APPROVED !== "true" || process.env.ELEVENLABS_VOICE_ID !== "uG1JFy6xppqckhHCs2KG")
       throw Error("Website voice is not approved");
     return {
-      modelId: required("SYRENA_READING_MODEL"),
+      providerId: reading.providerId,
+      modelId: reading.modelId,
       voiceId: required("ELEVENLABS_VOICE_ID"),
     };
   },
   async text(order) {
-    const client = new Anthropic({
-      apiKey: required("ANTHROPIC_API_KEY"),
-      maxRetries: 0,
-      timeout: 45000,
-    });
-    const prompt = promptFor(order.snapshot);
-    const message = await client.messages.create({
-      model: required("SYRENA_READING_MODEL"),
-      max_tokens: 1600,
-      system: prompt.system,
-      messages: [{ role: "user", content: prompt.user }],
-    });
-    const content = message.content
-      .filter((b) => b.type === "text")
-      .map((b) => b.text)
-      .join("\n");
-    return validateReading(JSON.parse(content), order.snapshot.includeShadow);
+    return generateProviderReading(order.snapshot);
   },
   async audio(order) {
     if (!order.reading) throw Error("Text not ready");

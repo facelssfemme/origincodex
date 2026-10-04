@@ -80,7 +80,7 @@ export interface Order {
   reading?: Reading;
   audioBase64?: string;
   emailPayload?: EmailPayload;
-  providerIdentity?: { modelId: string; voiceId: string };
+  providerIdentity?: { providerId: string; modelId: string; voiceId: string };
   emailFirstAttempt?: number;
   emailId?: string;
   lastError?: string;

@@ -9,6 +9,7 @@ import { stripeGateway } from "../src/server/orders/stripe.ts";
 import { assertPaidSession, emailFor } from "../src/server/orders/domain.ts";
 import { webhook } from "../src/server/orders/http.ts";
 import { checkout } from "../src/server/orders/checkout.ts";
+const adapters = { fixture: { configure: () => ({ generate: async () => { throw Error("No provider call expected"); } }) } };
 const account = "acct_1SrJtXK3yFNUEpTU";
 const env = {
   SYRENA_PAYMENT_MODE: "live",
@@ -24,7 +25,7 @@ const env = {
   SYRENA_FULFILLMENT_READY: "approved-live",
   STRIPE_WEBHOOK_SECRET: "fixture",
   SYRENA_WORKER_SECRET: "fixture-worker-more-than-32-characters",
-  ANTHROPIC_API_KEY: "fixture",
+  SYRENA_READING_PROVIDER: "fixture",
   SYRENA_READING_MODEL: "fixture",
   ELEVENLABS_API_KEY: "fixture",
   ELEVENLABS_VOICE_ID: "uG1JFy6xppqckhHCs2KG",
@@ -73,7 +74,8 @@ const session = (o) => ({
 test("configuration fails closed for disabled live, wrong key mode/account, insecure live origin and missing delivery readiness", () =>
   withEnv(async () => {
     assert.equal(paymentConfig().environment, "live");
-    assertLiveCheckoutReady();
+    assert.throws(() => assertLiveCheckoutReady()); // No owner-selected adapter is installed.
+    assertLiveCheckoutReady(adapters);
     for (const [key, value] of [
       ["SYRENA_PAYMENT_MODE", "bad"],
       ["STRIPE_SECRET_KEY", "sk_test_fixture"],
@@ -95,7 +97,7 @@ test("configuration fails closed for disabled live, wrong key mode/account, inse
       "ELEVENLABS_VOICE_ID",
     ]) {
       process.env[key] = "";
-      assert.throws(() => assertLiveCheckoutReady());
+      assert.throws(() => assertLiveCheckoutReady(adapters));
       process.env[key] = env[key];
     }
     process.env.SYRENA_LIVE_CHECKOUT_ENABLED = "";
@@ -145,7 +147,7 @@ test("live base/bundle creation validates account/prices/metadata and rejects sa
           },
         },
       };
-      const gateway = stripeGateway(paymentConfig(), fake);
+      const gateway = stripeGateway(paymentConfig(), fake, adapters);
       await gateway.create(o);
       assert.deepEqual(
         seen[0].line_items,

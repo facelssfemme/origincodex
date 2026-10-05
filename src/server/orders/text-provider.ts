@@ -1,3 +1,4 @@
+import { openAIReadingAdapter } from "./openai-reading.ts";
 import { promptFor, validateReading, type Snapshot } from "./domain.ts";
 
 type Environment = Record<string, string | undefined>;
@@ -9,9 +10,9 @@ export interface ReadingAdapter {
 }
 export type ReadingAdapters = Readonly<Record<string, ReadingAdapter>>;
 
-// No provider has been selected by the owner. Add only the selected adapter;
-// never infer a provider from an available key or silently choose a model.
-export const readingAdapters: ReadingAdapters = Object.freeze({});
+// OpenAI was explicitly selected. The provider and exact model still require
+// server configuration; neither is inferred from a key or browser input.
+export const readingAdapters: ReadingAdapters = Object.freeze({ openai: openAIReadingAdapter() });
 
 export function resolveReadingProvider(
   env: Environment = process.env,

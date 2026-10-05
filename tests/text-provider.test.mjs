@@ -7,7 +7,7 @@ const snapshot = validateSnapshot({
   answers: { name: "Test Rowan", birthMonth: 4, birthDay: 12, belonging: 0, intensity: 1, nightSky: 2, dreams: 1, recharge: 0, empathy: 1, soulAge: 2 },
   includeShadow: true,
 });
-test("no inferred/default provider, model or unconfirmed OpenAI adapter", () => {
+test("no inferred/default provider or model; selected OpenAI still requires a key", () => {
   for (const env of [{}, { OPENAI_API_KEY: "fixture" },
     { SYRENA_READING_PROVIDER: "openai", SYRENA_READING_MODEL: "unconfirmed" },
     { SYRENA_READING_PROVIDER: "toString", SYRENA_READING_MODEL: "fixture" }])

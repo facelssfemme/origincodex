@@ -74,7 +74,7 @@ const session = (o) => ({
 test("configuration fails closed for disabled live, wrong key mode/account, insecure live origin and missing delivery readiness", () =>
   withEnv(async () => {
     assert.equal(paymentConfig().environment, "live");
-    assert.throws(() => assertLiveCheckoutReady()); // No owner-selected adapter is installed.
+    assert.throws(() => assertLiveCheckoutReady()); // Fixture provider is not installed in production.
     assertLiveCheckoutReady(adapters);
     for (const [key, value] of [
       ["SYRENA_PAYMENT_MODE", "bad"],

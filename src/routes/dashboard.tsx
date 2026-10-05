@@ -164,15 +164,15 @@ function Dashboard() {
               <StatCard label="Sessions" value={String(report.uniqueSessions)} sub="anonymous session ids" />
               <StatCard
                 label="Verified purchases"
-                value={String(report.purchase.count)}
-                sub={`${report.paywall.checkoutStartedSessions} started checkout`}
+                value="Unavailable"
+                sub="Durable order reporting pending"
               />
               <StatCard
                 label="Verified revenue"
-                value={`${report.purchase.revenue.toFixed(2)}`}
-                sub={`AOV ${report.purchase.avgOrderValue.toFixed(2)}`}
+                value="Unavailable"
+                sub="Durable order reporting pending"
               />
-              <StatCard label="Upsell rate" value={`${report.purchase.upsellRate}%`} sub={`${report.purchase.upsellCount} with Shadow Origin`} />
+              <StatCard label="Upsell rate" value="Unavailable" sub="Durable order reporting pending" />
               <StatCard label="Paywall abandon" value={String(report.paywall.abandonedSessions)} sub={`${report.paywall.paymentAbandonedSessions} payment abandons`} />
               <StatCard
                 label="Avg paywall duration"
@@ -182,10 +182,7 @@ function Dashboard() {
             </div>
 
             <p className="text-[11px] text-gray-500/60 leading-relaxed">
-              <span className="text-gold/80">Verified revenue</span> counts only payments confirmed
-              server-side against Stripe (paid Checkout Session, correct product, amount and quiz
-              metadata). {report.purchase.legacyUnverifiedCount} legacy client-side purchase
-              {report.purchase.legacyUnverifiedCount === 1 ? " event" : " events"} (${report.purchase.legacyUnverifiedRevenue.toFixed(2)}) excluded.
+              Payment totals are unavailable here. Historical browser events are not proof of payment; use the intended Stripe account for reconciliation.
             </p>
 
             {/* Funnel */}
@@ -265,7 +262,7 @@ function Dashboard() {
               </div>
               <p className="text-[11px] text-gray-600/60 mt-1">
                 Durations come from a 15s heartbeat + exit/purchase events, per-session max.
-                Payment abandons = clicked unlock but never reached a Stripe-verified purchase.
+                Checkout observations are best-effort browser activity, not payment reconciliation.
               </p>
             </section>
 

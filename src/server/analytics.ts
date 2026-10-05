@@ -102,7 +102,9 @@ function num(v: unknown): number | null {
  * an unverified artifact and kept out of the revenue figure.
  */
 function isVerifiedPurchase(event: TrackedEvent): boolean {
-  return event.name === "purchase" && event.props?.verified === true;
+  // Historical file entries are client-writable and cannot prove payment.
+  void event;
+  return false;
 }
 
 export const getAnalytics = createServerFn({ method: "POST" })
